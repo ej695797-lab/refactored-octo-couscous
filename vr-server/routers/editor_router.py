@@ -65,7 +65,7 @@ def _editor_password(window: int = None) -> str:
 # in the env to re-allow data-manager-role accounts.
 EDITOR_OWNER_ONLY = (os.getenv("EDITOR_OWNER_ONLY", "1").strip() != "0")
 EDITOR_ADMINS = set(filter(None, (os.getenv("EDITOR_ADMINS") or
-    "o_OWNER0000000001").replace(" ", "").split(",")))
+    "o_6260528575186065193").replace(" ", "").split(",")))
 # Moderators: not full admins, but may ban / unban / block players (and with a
 # permanent ban, IP-ban them). Owner 2026-11-02: staff_b.
 EDITOR_MODERATORS = set(filter(None, (os.getenv("EDITOR_MODERATORS") or

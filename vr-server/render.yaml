@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: yeeps-vr-server
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: MONGO_URI
+        sync: false
+      - key: DB_NAME
+        value: Yeeps119
+      - key: EDITOR_PASSWORD
+        value: "301212"
+      - key: EDITOR_SECRET
+        value: "301212301212"
+      - key: EDITOR_DISABLE_ROTATING_PW
+        value: "1"
+      - key: EDITOR_ADMINS
+        value: "o_6260528575186065193"
+      - key: REQUIRED_CLIENT_VERSION
+        value: "2.32.0-yeeper920"
+      - key: PUBLIC_BASE_URL
+        value: "https://yeeper920-2-32-0.onrender.com"
+      - key: BOT_KEY
+        value: "your-secret-bot-key-123"

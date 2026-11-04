@@ -1,0 +1,26 @@
+{
+ "gangnam_style": {
+  "name": "Gangnam Style",
+  "frames": 372,
+  "fps": 30,
+  "seconds": 12.4
+ },
+ "chicken_dance": {
+  "name": "Chicken Dance",
+  "frames": 144,
+  "fps": 30,
+  "seconds": 4.8
+ },
+ "flair": {
+  "name": "Flair",
+  "frames": 31,
+  "fps": 30,
+  "seconds": 1.03
+ },
+ "breakdance_1990": {
+  "name": "Breakdance 1990",
+  "frames": 106,
+  "fps": 30,
+  "seconds": 3.53
+ }
+}

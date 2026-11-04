@@ -1,0 +1,1737 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Live View</title>
+<!-- Editor View tab (owner 2026-10-27): a live 3D look at a map through the Photon bot.
+     Data: /editor/api/photon/view (players + VR tracking, 4x/s), /view/blocks (on change).
+     Blocks: the real game models/textures/palette (the Map Maker's assets, /editor/view/a/).
+     Players: the real Yeep avatar (view-avatar.json) driven by their head + hand tracking.
+     Edits: /editor/api/photon/view/edit -> the bot's vput / vdel commands. -->
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #1d1915; --bg2: #262019; --card: #2d2720; --field: #211c17;
+    --ink: #f1e8d9; --muted: #a8997f; --line: #453c31;
+    --purple: #8c7bc9; --red: #e26a6a; --green: #45a386; --gold: #e8b84a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+               font: 14px/1.4 system-ui, -apple-system, sans-serif; overflow: hidden; }
+  #app { display: flex; height: 100%; }
+  #side { width: 310px; flex: none; background: var(--bg2); border-right: 1px solid var(--line);
+          overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 14px; }
+  #stage { position: relative; flex: 1; min-width: 0; min-height: 0; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+  h2 { font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); margin: 0 0 6px; }
+  h2 .muted { text-transform: none; letter-spacing: 0; }
+  select, input, button { font: inherit; color: var(--ink); background: var(--field);
+                          border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; }
+  button { cursor: pointer; background: var(--card); }
+  button:hover { border-color: var(--muted); }
+  button.on { background: var(--purple); border-color: var(--purple); color: #fff; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .row > input { flex: 1; min-width: 0; }
+  .quick button { font-size: 12px; padding: 4px 7px; }
+  .sw { width: 24px; height: 24px; border-radius: 6px; border: 2px solid transparent; padding: 0; }
+  .sw.on { border-color: #fff; box-shadow: 0 0 0 1px #000; }
+  .sw.def { background: conic-gradient(#df5454, #e1bb51, #469740, #5d6bbd, #735fb0, #df5454); }
+  .muted { color: var(--muted); font-size: 12px; }
+  .map { border: 1px solid var(--line); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 4px; }
+  .map.cur { border-color: var(--gold); }
+  .map .top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .map .nm { font-weight: 600; }
+  .map .who { font-size: 12px; color: var(--muted); }
+  .map button { font-size: 12px; padding: 4px 9px; }
+  #hud { position: absolute; left: 10px; top: 10px; right: 10px; display: flex; gap: 8px;
+         flex-wrap: wrap; pointer-events: none; }
+  .pill { background: rgba(29, 25, 21, .85); border: 1px solid var(--line); border-radius: 999px;
+          padding: 4px 11px; font-size: 12px; }
+  .pill.live { color: var(--green); }
+  .pill.dead { color: var(--red); }
+  #hint { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none;
+          color: #4a3f35; font-size: 15px; text-align: center; padding: 16px; }
+  #hint[hidden] { display: none; }
+  #plist div { padding: 5px 7px; border-radius: 6px; cursor: pointer; display: flex;
+               justify-content: space-between; gap: 8px; }
+  #plist div:hover { background: var(--card); }
+  #msg, #blog { font-size: 12px; color: var(--muted); white-space: pre-wrap; word-break: break-word; }
+  #msg { color: var(--ink); min-height: 1.4em; }
+  label { display: inline-flex; gap: 5px; align-items: center; }
+  .meter { display: inline-block; width: 52px; height: 9px; background: #8883; border-radius: 5px; overflow: hidden; vertical-align: middle; }
+  .meter i { display: block; height: 100%; width: 0; }
+  #ptt.on { background: var(--green); border-color: var(--green); color: #fff; }
+  #patlist { width: 100%; height: 150px; font-size: 12px; }
+  .acts h3 { font-size: 11px; color: var(--muted); font-weight: 600; margin: 8px 0 4px; }
+  .acts .row button { font-size: 12px; padding: 4px 7px; }
+  @media (max-width: 760px) {
+    #app { flex-direction: column-reverse; }
+    #side { width: auto; height: 44%; border-right: 0; border-top: 1px solid var(--line); }
+  }
+</style>
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="app">
+  <aside id="side">
+    <section>
+      <h2>Maps with players <span class="muted" id="mapcount"></span></h2>
+      <div id="maps" class="muted">loading maps...</div>
+      <div class="row" style="margin-top:8px">
+        <button id="stop" style="background:#a33;color:#fff" title="Take the bot out of the game">Disconnect bot</button>
+        <button id="hidebot" title="Remove your bot's player model from the game (your voice still works)">Hide</button>
+        <label class="muted" title="A small picture of your bot's pose, bottom left: drag the bubbles to move its head and hands"><input type="checkbox" id="poseview" checked> My pose</label>
+        <button id="posereset" title="Back to the normal standing pose, hands behind the back">Reset pose</button>
+        <label class="muted"><input type="checkbox" id="follow"> camera follows a player</label>
+      </div>
+    </section>
+    <section>
+      <h2>Voice <span class="muted" id="vst">click the map once to hear it</span></h2>
+      <button id="ptt" style="width:100%;padding:12px;font-size:16px;touch-action:none;user-select:none">Hold to talk</button>
+      <div class="row" style="margin-top:6px">
+        <label class="muted"><input type="checkbox" id="micopen"> Mic always on</label>
+        <label class="muted" title="The bot's avatar and your voice sit where the camera is, facing where you look"><input type="checkbox" id="flycam" checked> Bot flies with my camera</label>
+        <label class="muted" title="Hear each player from where they are, relative to your camera"><input type="checkbox" id="v3d" checked> 3D voices</label>
+              </div>
+      <div class="row" style="margin-top:6px">
+        <label class="muted">Volume <input type="range" id="vvol" min="0" max="4" step="0.1" value="1.5" style="width:110px"></label>
+        <span class="meter" title="your mic"><i id="vmic" style="background:#3c9"></i></span>
+        <span class="meter" title="players"><i id="vin" style="background:#39f"></i></span>
+      </div>
+      <div class="muted" id="vspk" style="margin-top:4px"></div>
+    </section>
+    <section>
+      <h2>Mode</h2>
+      <div class="row" id="modes">
+        <button data-m="look" class="on">Look</button>
+        <button data-m="build">Build</button>
+        <button data-m="erase">Erase</button>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <button id="refresh">Refresh map</button><button id="fit">Whole map</button><button id="top">Top view</button>
+      </div>
+    </section>
+    <section>
+      <h2>Block</h2>
+      <div class="row"><select id="patcat" style="flex:1"><option value="">All blocks</option></select></div>
+      <div class="row" style="margin-top:6px"><input id="patq" spellcheck="false" autocomplete="off" placeholder="search blocks"></div>
+      <select id="patlist" size="8" style="margin-top:6px"></select>
+      <div class="row" style="margin-top:6px"><input id="pat" value="1x1_stuffed" spellcheck="false" autocomplete="off"></div>
+      <div class="row quick" id="quick" style="margin-top:6px"></div>
+      <div class="row" style="margin-top:8px">
+        <button id="turn">Turn (T)</button><button id="flip">Tip (R)</button>
+        <span class="muted" id="facing"></span>
+      </div>
+      <h2 style="margin-top:10px">Color <span class="muted" id="colname">default</span></h2>
+      <div class="row" id="cols"></div>
+    </section>
+    <section>
+      <h2>Actions</h2>
+      <div class="row"><select id="acttarget" style="flex:1"><option value="">the hooked player</option></select></div>
+      <div class="acts" id="acts"></div>
+      <div class="row" style="margin-top:8px"><input id="actcmd" placeholder="bot command" spellcheck="false" autocomplete="off"><button id="actsend">Send</button></div>
+    </section>
+    <section>
+      <h2>In this map</h2>
+      <div id="plist" class="muted">nobody yet</div>
+    </section>
+    <section>
+      <h2>Bot</h2>
+      <div id="msg"></div>
+      <div id="blog"></div>
+    </section>
+  </aside>
+  <div id="stage">
+    <canvas id="c"></canvas>
+    <div id="hint">Pick a map and press Watch</div>
+    <div id="hud"><span class="pill dead" id="st">connecting...</span>
+      <span class="pill" id="rm" hidden></span><span class="pill" id="cnt" hidden></span></div>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
+
+const API = "/editor/api/photon";
+const ASSETS = "/editor/view/a/";
+const $ = id => document.getElementById(id);
+
+// Real paint palette (Blazeisodd/YeepsMapLoader PAINT_PALETTE, same as the Map Maker).
+const COLORS = {"blue_turquoise":"#38886d","orange_light":"#df9e54","blue_dark":"#576077","black":"#121212",
+  "gray_cool_light":"#c2d4dc","white":"#f5f5f5","midnight":"#244273","gray_cool":"#97acb4","cadet":"#6ba9b3",
+  "purple_dark":"#36394c","orange":"#df6f54","brown":"#91776b","blue":"#5d6bbd","gray_dark":"#77797b",
+  "yellow":"#e1bb51","green_light":"#83bb44","red":"#df5454","yellow_light":"#f5c68d","cyan_light":"#5ec9a0",
+  "purple":"#735fb0","teal":"#387d88","green_dark":"#2d594f","pink":"#db89ac","gray":"#bcbfc4",
+  "lavender":"#927fde","purple_light":"#d378c4","blue_light":"#82b9df","cyan":"#5ec6c9","maroon":"#9d4141",
+  "mocha_light":"#a16550","beige":"#e2c5a0","brown_light":"#b79c91","brown_dark":"#423732","periwinkle":"#c1b4f9",
+  "amber":"#ff8622","rose":"#c53076","red_dark":"#54393c","mocha":"#89462d","guac":"#e3f06d","green":"#469740",
+  "olive":"#466a2d","olive_light":"#689c43","blurple":"#3264af","maroon_dark":"#352a2a","blackhole":"#1b1b1b",
+  "yellow_emissive":"#f7c331","yellow_dark_emissive":"#e1bb51","orange_emissive":"#ff8622","red_emissive":"#df5454",
+  "cyan_emissive":"#5ec6c9","blue_emissive":"#5d6bbd","green_emissive":"#469740","purple_emissive":"#735fb0",
+  "purple_dark_emissive":"#36394c","plush_blue":"#82b9df","plush_peach":"#f2c4af","plush_purple":"#d378c4"};
+const QUICK = ["1x1_stuffed", "2x2x2_stuffed", "1x1_wooden", "4x4_wooden", "2x2x1_grassRock",
+               "4x4x4_grassRock", "2x2x2_bush", "2x2_trampoline"];
+// Unity axes: +X -X +Y -Y +Z -Z (a block faces DIRS[fwd] with its top toward DIRS[up]).
+const DIRS = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
+const DN = ["+X", "-X", "+Y", "-Y", "+Z", "-Z"];
+
+async function api(path, opt) {
+  const r = await fetch(API + path, Object.assign({ credentials: "same-origin", cache: "no-store" }, opt));
+  if (r.status === 401) { location.href = "/editor/login"; throw new Error("signed out"); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.detail || "HTTP " + r.status);
+  return j;
+}
+const say = t => { $("msg").textContent = t; };
+const post = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" },
+                                         body: JSON.stringify(body || {}) });
+
+// ---------- block sizes / rotation (same rules as the game + Map Maker) ----------
+let INDEX = {}, CAT = { defaults: {} }, SIZES = {}, PATS = [];
+const nameDims = n => { const m = /^(\d+)x(\d+)(?:x(\d+))?_/.exec(n || ""); return m ? [+m[1], +(m[3] || 1), +m[2]] : [1, 1, 1]; };
+const dims = n => (INDEX[n] && INDEX[n].s) || SIZES[n] || nameDims(n);
+const cross = (a, b) => [a[1]*b[2] - a[2]*b[1], a[2]*b[0] - a[0]*b[2], a[0]*b[1] - a[1]*b[0]];
+function extent(name, fwd, up) {       // cells along x, y, z once turned (local X = up x forward)
+  const [w, h, d] = dims(name), f = DIRS[fwd] || DIRS[4], u = DIRS[up] || DIRS[2], r = cross(u, f);
+  return [0, 1, 2].map(i => Math.abs(w*r[i]) + Math.abs(h*u[i]) + Math.abs(d*f[i]));
+}
+function rotMatrix(fwd, up) {
+  const f = DIRS[fwd] || DIRS[4], u = DIRS[up] || DIRS[2], r = cross(u, f);
+  return new THREE.Matrix4().makeBasis(new THREE.Vector3(...r), new THREE.Vector3(...u), new THREE.Vector3(...f));
+}
+
+// ---------- scene ----------
+const canvas = $("c");
+let renderer = null;
+try {
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+} catch (e) {
+  $("hint").textContent = "This browser can't draw 3D (WebGL is turned off). Try Chrome or the Quest browser.";
+  $("hint").style.color = "var(--muted)";
+}
+const scene = new THREE.Scene();
+scene.background = new THREE.Color("#bfe3f2");
+const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 5000);
+camera.position.set(110, 80, 120);
+// Same controls as the Map Maker: no damping (small drags stop exactly where you let
+// go), left-drag orbit, middle click = pick a block, WASD/QE fly. Holding the right
+// button is the fly camera (below), so OrbitControls leaves it alone.
+const controls = new OrbitControls(camera, canvas);
+controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: -1, RIGHT: -1 };
+controls.zoomToCursor = true;           // the wheel zooms toward what's under the mouse
+scene.add(new THREE.HemisphereLight(0xffffff, 0x9a8f80, 1.6));
+const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+sun.position.set(0.6, 1, 0.35);
+scene.add(sun);
+// Everything lives in grid units (1 = one 0.5 m cell) in Unity's left-handed space;
+// mirroring Z shows it like the game.
+const root = new THREE.Group();
+root.scale.z = -1;
+scene.add(root);
+const blockGroup = new THREE.Group();
+root.add(blockGroup);
+
+const loader = new THREE.TextureLoader();
+const texCache = new Map();
+function tex(name, nearest) {
+  const k = name + (nearest ? "|n" : "");
+  if (!texCache.has(k)) {
+    const t = loader.load(ASSETS + "t/" + name + ".png");
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    if (nearest) { t.magFilter = t.minFilter = THREE.NearestFilter; t.generateMipmaps = false;
+                   t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping; }
+    texCache.set(k, t);
+  }
+  return texCache.get(k);
+}
+
+let dimsRoom = null, floor = null;
+const roomGroup = new THREE.Group();
+root.add(roomGroup);
+function setRoom(d) {
+  if (dimsRoom && d.join() === dimsRoom.join()) return;
+  dimsRoom = d.slice();
+  roomGroup.clear();
+  const [DX, DY, DZ] = dimsRoom;
+  const ft = loader.load(ASSETS + "t/white-checker.png");   // its own copy: it needs its own repeat
+  ft.colorSpace = THREE.SRGBColorSpace;
+  ft.wrapS = ft.wrapT = THREE.RepeatWrapping;
+  ft.repeat.set(DX / 2, DZ / 2);
+  floor = new THREE.Mesh(new THREE.PlaneGeometry(DX, DZ),
+                         new THREE.MeshLambertMaterial({ map: ft, color: "#38886d", side: THREE.DoubleSide }));
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.set(DX / 2, -0.001, DZ / 2);
+  roomGroup.add(floor);
+  const box = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(DX, DY, DZ)),
+                                     new THREE.LineBasicMaterial({ color: 0x2d594f, transparent: true, opacity: .35 }));
+  box.position.set(DX / 2, DY / 2, DZ / 2);
+  roomGroup.add(box);
+  fitRoom();
+}
+function fitRoom() {
+  if (!dimsRoom) return;
+  const [DX, , DZ] = dimsRoom;
+  const c = root.localToWorld(new THREE.Vector3(DX / 2, 0, DZ / 2));
+  const r = Math.max(DX, DZ);
+  controls.target.copy(c);
+  camera.position.copy(c).add(new THREE.Vector3(r * 0.55, r * 0.7, r * 0.85));
+}
+function topView() {
+  const r = dimsRoom ? Math.max(dimsRoom[0], dimsRoom[2]) : 96;
+  $("follow").checked = false;
+  camera.position.copy(controls.target).add(new THREE.Vector3(0, r * 1.1, 0.01));
+}
+
+// ---------- real block models (ported from the Map Maker) ----------
+const modelCache = new Map();
+function loadModel(name) {
+  if (!modelCache.has(name)) modelCache.set(name, (async () => {
+    const res = await fetch(ASSETS + "b/" + encodeURIComponent(name) + ".bin");
+    if (!res.ok) throw new Error("no model");
+    const buf = await res.arrayBuffer();
+    const hl = new DataView(buf).getUint32(0, true);
+    const head = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, hl)));
+    const base = 4 + hl, out = [];
+    for (const p of head.parts) {
+      if (p.prim) {
+        out.push({ geo: primGeo(p.prim), spec: head.mats[p.mat] || { k: "fixed", c: "#cccccc" },
+                   m: new THREE.Matrix4().fromArray(p.m), prim: true });
+        continue;
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(buf, base + p.pos, p.v * 3), 3));
+      if (p.nrm != null) g.setAttribute("normal", new THREE.BufferAttribute(new Float32Array(buf, base + p.nrm, p.v * 3), 3));
+      if (p.uv != null) g.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(buf, base + p.uv, p.v * 2), 2));
+      if (p.uv1 != null) g.setAttribute("uv1", new THREE.BufferAttribute(new Float32Array(buf, base + p.uv1, p.v * 2), 2));
+      if (p.col != null) g.setAttribute("color", new THREE.BufferAttribute(new Uint8Array(buf, base + p.col, p.v * 4), 4, true));
+      const m = new THREE.Matrix4().fromArray(p.m);
+      for (const gr of p.g) {
+        const sub = g.clone();
+        const idx = gr.w === 4 ? new Uint32Array(buf, base + gr.i, gr.n) : new Uint16Array(buf, base + gr.i, gr.n);
+        sub.setIndex(new THREE.BufferAttribute(idx, 1));
+        const spec = head.mats[gr.mat] || { k: "fixed", c: "#cccccc" };
+        if (spec.tri) boxUV(sub);
+        if (p.nrm == null) sub.computeVertexNormals();
+        out.push({ geo: sub, spec, m, col: p.col != null, uv1: p.uv1 != null });
+      }
+    }
+    return out;
+  })());
+  return modelCache.get(name);
+}
+// Triplanar materials (brick, rock...) tile in world space: one tile per cell.
+function boxUV(g) {
+  const p = g.attributes.position, n = g.attributes.normal, uv = new Float32Array(p.count * 2);
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i) * 2, y = p.getY(i) * 2, z = p.getZ(i) * 2;
+    const ax = n ? Math.abs(n.getX(i)) : 0, ay = n ? Math.abs(n.getY(i)) : 1, az = n ? Math.abs(n.getZ(i)) : 0;
+    if (ay >= ax && ay >= az) { uv[i*2] = x; uv[i*2 + 1] = z; }
+    else if (ax >= az) { uv[i*2] = z; uv[i*2 + 1] = y; }
+    else { uv[i*2] = x; uv[i*2 + 1] = y; }
+  }
+  g.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+}
+const matCache = new Map();
+const scrolling = [];
+function material(spec, color, col) {
+  const paint = spec.k === "paint";
+  const key = JSON.stringify(spec) + (paint ? color : "") + (col ? "|vc" : "");
+  if (matCache.has(key)) return matCache.get(key);
+  const o = { side: THREE.FrontSide };
+  if (spec.k === "palette") { o.map = tex(spec.t || "global-color-palette", true); o.color = 0xffffff; }
+  else if (spec.t === "eye-new") { o.map = eyeTex(spec.c || "#8c86b7"); o.color = 0xffffff; }
+  else {
+    o.color = paint ? (COLORS[color] || "#ffffff") : (spec.c || "#ffffff");
+    if (spec.t) {
+      o.map = tex(spec.t);
+      if (spec.scroll) { o.map = o.map.clone(); o.map.needsUpdate = true; scrolling.push(o.map); }
+    }
+  }
+  if (spec.vc && col) o.vertexColors = true;
+  if (spec.clip) { o.alphaTest = spec.clip; o.side = THREE.DoubleSide; }
+  if (spec.blend) { o.transparent = true; o.opacity = .45; o.depthWrite = false; }
+  if (spec.e) { o.emissive = new THREE.Color(spec.e); o.emissiveIntensity = 1; }
+  else if (spec.glow || (paint && /emissive/.test(color))) { o.emissive = new THREE.Color(o.color); o.emissiveIntensity = .7; }
+  const m = new THREE.MeshLambertMaterial(o);
+  matCache.set(key, m);
+  return m;
+}
+const decalMats = new Map();
+function decalMat(t, uv1) {
+  const k = t + (uv1 ? "|1" : "");
+  if (!decalMats.has(k)) {
+    let map = tex(t);
+    if (uv1) { map = map.clone(); map.channel = 1; map.needsUpdate = true; }
+    decalMats.set(k, new THREE.MeshLambertMaterial({ map, transparent: true, alphaTest: .05, depthWrite: false,
+      polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
+  }
+  return decalMats.get(k);
+}
+const eyeCache = new Map();
+function eyeTex(hex) {          // eye mask: red = white, green = eye colour, black = pupil
+  if (eyeCache.has(hex)) return eyeCache.get(hex);
+  const c = document.createElement("canvas");
+  c.width = c.height = 128;
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  const img = new Image();
+  img.onload = () => {
+    const g = c.getContext("2d");
+    g.drawImage(img, 0, 0, 128, 128);
+    const d = g.getImageData(0, 0, 128, 128), px = d.data, ec = new THREE.Color(hex);
+    const er = Math.round(ec.r * 255), eg = Math.round(ec.g * 255), eb = Math.round(ec.b * 255);
+    for (let i = 0; i < px.length; i += 4) {
+      const r = px[i], gg = px[i + 1];
+      if (gg > 128) { px[i] = er; px[i + 1] = eg; px[i + 2] = eb; }
+      else if (r > 128) { px[i] = px[i + 1] = px[i + 2] = 255; }
+      else { px[i] = px[i + 1] = px[i + 2] = 15; }
+    }
+    g.putImageData(d, 0, 0);
+    t.needsUpdate = true;
+  };
+  img.src = ASSETS + "t/eye-new.png";
+  eyeCache.set(hex, t);
+  return t;
+}
+function primGeo(kind) {
+  if (kind === "quad") return new THREE.PlaneGeometry(1, 1);
+  if (kind === "plane") return new THREE.PlaneGeometry(10, 10).rotateX(-Math.PI / 2);
+  if (kind === "sphere") return new THREE.SphereGeometry(.5, 16, 12);
+  if (kind === "cylinder") return new THREE.CylinderGeometry(.5, .5, 2, 16);
+  if (kind === "capsule") return new THREE.CapsuleGeometry(.5, 1, 4, 12);
+  return new THREE.BoxGeometry(1, 1, 1);
+}
+function partMeshes(p, color) {
+  const base = p.spec.k === "paint" ? { k: "paint" } : { k: "fixed", c: p.spec.c || "#ffffff", vc: p.spec.vc };
+  const mats = p.spec.decal ? [material(base, color, p.col), decalMat(p.spec.t, p.uv1)] : [material(p.spec, color, p.col)];
+  return mats.map(m => { const mesh = new THREE.Mesh(p.geo, m); mesh.applyMatrix4(p.m); return mesh; });
+}
+const beamGeo = new THREE.CylinderGeometry(.18, .18, 12, 12, 1, true).translate(0, 6.5, 0);
+const hitMat = new THREE.MeshBasicMaterial({ visible: false });
+
+// key -> { name, x, y, z, fwd, up, color, mesh, model }
+const blocks = new Map();
+let occ = null;                         // occupied cells (built lazily)
+function buildMesh(b) {
+  const ext = extent(b.name, b.fwd, b.up);
+  const g = new THREE.Group();
+  g.position.set(b.x + ext[0] / 2, b.y + ext[1] / 2, b.z + ext[2] / 2);
+  const hit = new THREE.Mesh(new THREE.BoxGeometry(...ext), hitMat);
+  hit.userData.block = b;
+  g.add(hit);
+  const model = new THREE.Group();
+  model.applyMatrix4(rotMatrix(b.fwd, b.up));
+  model.scale.multiplyScalar(2);       // metres -> cells
+  g.add(model);
+  b.mesh = g; b.model = model;
+  blockGroup.add(g);
+  dressModel(b);
+}
+async function dressModel(b) {
+  pendingModels++;
+  try { await dressModel2(b); } finally { pendingModels--; b.dressed = true; scheduleBake(); }
+}
+async function dressModel2(b) {
+  let parts;
+  try { parts = await loadModel(b.name); }
+  catch (e) {
+    const box = new THREE.Mesh(new THREE.BoxGeometry(...dims(b.name).map(v => v / 2)), material({ k: "paint" }, b.color));
+    if (b.model) b.model.add(box);
+    return;
+  }
+  if (!b.model) return;
+  b.model.clear();
+  for (const p of parts) b.model.add(...partMeshes(p, b.color));
+  if (b.name === "2x2x2_mobLure") {
+    b.model.add(new THREE.Mesh(beamGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color(COLORS[b.color] || "#8aceff"),
+      transparent: true, opacity: .35, depthWrite: false, side: THREE.DoubleSide })));
+  }
+}
+function removeMesh(b) {
+  if (b.mesh) { blockGroup.remove(b.mesh); b.mesh = null; b.model = null; }
+  if (b.baked) scheduleBake(120);          // it's still in the baked map until the re-bake
+}
+
+// Baking: thousands of separate block models are thousands of draw calls. Once the models
+// have loaded, every part sharing a material is merged into one mesh (a few hundred draw
+// calls for a whole map). New blocks show as their own model until the next bake; the
+// per-block hit boxes stay for clicking.
+const baked = new THREE.Group();
+root.add(baked);
+let bakeTimer = null, pendingModels = 0;
+function scheduleBake(ms = 400) { clearTimeout(bakeTimer); bakeTimer = setTimeout(bake, ms); }
+function bake() {
+  if (pendingModels > 0) { scheduleBake(300); return; }
+  for (const m of baked.children) m.geometry.dispose();
+  baked.clear();
+  root.updateMatrixWorld(true);
+  const rootInv = new THREE.Matrix4().copy(root.matrixWorld).invert(), mm = new THREE.Matrix4();
+  const groups = new Map();
+  for (const b of blocks.values()) {
+    if (!b.model || !b.dressed) continue;
+    b.model.visible = true;
+    b.model.updateMatrixWorld(true);
+    b.model.traverse(o => {
+      if (!o.isMesh) return;
+      mm.multiplyMatrices(rootInv, o.matrixWorld);
+      const g = o.geometry.clone();
+      g.applyMatrix4(mm);
+      if (!g.index) g.setIndex([...Array(g.attributes.position.count).keys()]);
+      if (mm.determinant() < 0) {          // a mirrored part: keep its faces facing out
+        const ix = g.index.array.slice();
+        for (let i = 0; i + 2 < ix.length; i += 3) { const t = ix[i + 1]; ix[i + 1] = ix[i + 2]; ix[i + 2] = t; }
+        g.setIndex(new THREE.BufferAttribute(ix, 1));
+      }
+      for (const k of Object.keys(g.morphAttributes)) delete g.morphAttributes[k];
+      const key = o.material.uuid + "|" + Object.keys(g.attributes).sort().join(",");
+      if (!groups.has(key)) groups.set(key, { mat: o.material, list: [] });
+      groups.get(key).list.push(g);
+    });
+    b.model.visible = false;
+    b.baked = true;
+  }
+  for (const { mat, list } of groups.values()) {
+    let merged = null;
+    try { merged = mergeGeometries(list, false); } catch (e) { merged = null; }
+    if (merged) {
+      for (const g of list) g.dispose();
+      baked.add(new THREE.Mesh(merged, mat));
+    } else {
+      // These parts don't merge (different vertex data): keep them as their own meshes
+      // instead of dropping them (that left some maps with missing blocks).
+      for (const g of list) baked.add(new THREE.Mesh(g, mat));
+    }
+  }
+}
+
+function setBlocks(rows) {
+  const next = new Set();
+  for (const r of rows) {
+    const [name, x, y, z, fwd, up, color] = r;
+    const key = `${name}|${x}|${y}|${z}|${fwd}|${up}|${color}`;
+    next.add(key);
+    if (!blocks.has(key)) {
+      const b = { name, x, y, z, fwd, up, color };
+      blocks.set(key, b);
+      buildMesh(b);
+    }
+  }
+  for (const [k, b] of blocks) if (!next.has(k)) { removeMesh(b); blocks.delete(k); }
+  occ = null;
+}
+function clearBlocks() {
+  for (const b of blocks.values()) { b.baked = false; removeMesh(b); }
+  blocks.clear(); occ = null;
+  for (const m of baked.children) m.geometry.dispose();
+  baked.clear();
+}
+function cellsOf(x, y, z, ext, fn) {
+  for (let i = 0; i < ext[0]; i++) for (let j = 0; j < ext[1]; j++) for (let k = 0; k < ext[2]; k++) fn((x + i) + "," + (y + j) + "," + (z + k));
+}
+function isFree(c, ext) {
+  if (!occ) { occ = new Set(); for (const b of blocks.values()) cellsOf(b.x, b.y, b.z, extent(b.name, b.fwd, b.up), k => occ.add(k)); }
+  let free = true;
+  cellsOf(c[0], c[1], c[2], ext, k => { if (occ.has(k)) free = false; });
+  return free;
+}
+
+// ---------- players: the real Yeep rig driven by VR tracking ----------
+// yeep.json = the game's own player rig (skeleton, skinned body + hands, eye quads),
+// exported from the Photon bot Unity project by tools/export_yeep_rig.py. Unity space,
+// metres. The network pose (via the bot) is body-local: h = head pos+rot, r / l = hand
+// pos+rot+(index, grip, thumb curl).
+let RIG = null;
+const players = new Map();            // actor -> state
+const tmpV = new THREE.Vector3(), tmpQ = new THREE.Quaternion(), curlQ = new THREE.Quaternion();
+const ringGeo = new THREE.RingGeometry(0.75, 1.0, 32).rotateX(-Math.PI / 2);
+const quadGeo = new THREE.PlaneGeometry(1, 1);
+const ARM = { r: ["UpperArm.R", "LowerArm.R", "Wrist.R"], l: ["UpperArm.L", "LowerArm.L", "Wrist.L"] };
+// The game's IK poles (SimpleAvatar_Puppet): elbows bend out, down and back.
+const POLE = { r: new THREE.Vector3(2, -1, -1), l: new THREE.Vector3(-2, -1, -1) };
+// Finger curl per joint (radians at a full press) and the joints' bend axis.
+// Finger bones run along their local +Y and the fingers sit side by side along X, palm
+// toward -Z: index / middle bend about X, the thumb (turned to point outward) about its Z.
+// Radians per joint at a full grip (1); three joints per finger.
+const CURL = { Index: 1.1, Middle: 1.1, Thumb: 0.55 };
+const CURL_AXES = { Index: new THREE.Vector3(1, 0, 0), Middle: new THREE.Vector3(1, 0, 0),
+                    Thumb: new THREE.Vector3(0, 0, 1) };
+
+function rigGeo(m, skinned) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(m.pos, 3));
+  if (m.uv) g.setAttribute("uv", new THREE.Float32BufferAttribute(m.uv, 2));
+  if (m.col) g.setAttribute("color", new THREE.Float32BufferAttribute(m.col, 4));
+  if (skinned) {
+    g.setAttribute("skinIndex", new THREE.Uint16BufferAttribute(m.si, 4));
+    g.setAttribute("skinWeight", new THREE.Float32BufferAttribute(m.sw, 4));
+  }
+  // Unity's triangles wind the other way once the map's Z mirror is applied by the
+  // bones (the mesh itself sits at the origin, so three.js can't tell): flip them, or
+  // the outside gets culled and you see into the head / mouth.
+  const idx = m.idx.slice();
+  for (let i = 0; i + 2 < idx.length; i += 3) { const t = idx[i + 1]; idx[i + 1] = idx[i + 2]; idx[i + 2] = t; }
+  g.setIndex(idx);
+  if (m.subs && m.subs.length > 1) m.subs.forEach(([start, count], i) => g.addGroup(start, count, i));
+  if (m.nrm) g.setAttribute("normal", new THREE.Float32BufferAttribute(m.nrm, 3));
+  else g.computeVertexNormals();
+  return g;
+}
+fetch(ASSETS + "yeep.json").then(r => r.json()).then(j => {
+  RIG = { j, body: rigGeo(j.body, true), hand: rigGeo(j.hand, true),
+          bodyInv: j.body.bind.map(a => new THREE.Matrix4().fromArray(a)),
+          handInv: j.hand.bind.map(a => new THREE.Matrix4().fromArray(a)) };
+  for (const s of players.values()) removePlayer(s);
+  players.clear();                    // rebuilt with the real rig on the next update
+  listSig = "";
+}).catch(() => {});
+
+function hue(s) { let h = 0; for (const ch of String(s)) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return h % 360; }
+function nameTag(text, css) {
+  const cv = document.createElement("canvas"), ctx = cv.getContext("2d"), fs = 40;
+  const font = `600 ${fs}px system-ui, sans-serif`;
+  ctx.font = font;
+  cv.width = Math.ceil(ctx.measureText(text).width) + 32;
+  cv.height = fs + 24;
+  ctx.font = font;
+  ctx.fillStyle = "rgba(20,17,14,0.8)";
+  if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(0, 0, cv.width, cv.height, 16); ctx.fill(); }
+  else ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.fillStyle = css;
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, 16, cv.height / 2 + 2);
+  const t = new THREE.CanvasTexture(cv);
+  t.colorSpace = THREE.SRGBColorSpace;
+  // constant size on screen (doesn't grow huge up close or vanish far away)
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, depthTest: false, transparent: true, sizeAttenuation: false }));
+  sp.scale.set(0.034 * cv.width / cv.height, 0.034, 1);
+  sp.renderOrder = 10;
+  return sp;
+}
+const q4 = a => new THREE.Quaternion(a[0], a[1], a[2], a[3]);
+const v3 = a => new THREE.Vector3(a[0], a[1], a[2]);
+
+// A bone's pose in the avatar (body) frame: the avatar group cancels the map's mirror
+// and the metre->cell scale, so these are plain Unity body-frame values.
+const _m = new THREE.Matrix4(), _inv = new THREE.Matrix4(), _p = new THREE.Vector3(), _q = new THREE.Quaternion(), _s = new THREE.Vector3();
+function relAv(s, obj, outPos, outQuat) {
+  _inv.copy(s.av.matrixWorld).invert();
+  _m.multiplyMatrices(_inv, obj.matrixWorld).decompose(outPos || _p, outQuat || _q, _s);
+}
+function setBoneAv(s, bone, qAv) {           // give a bone this rotation in the body frame
+  const pq = new THREE.Quaternion();
+  relAv(s, bone.parent, null, pq);
+  bone.quaternion.copy(pq.invert().multiply(qAv));
+  bone.updateMatrixWorld(true);
+}
+function aim(s, bone, pivot, childNow, childWant) {   // swing a bone so its child moves toward childWant
+  const from = childNow.clone().sub(pivot).normalize(), to = childWant.clone().sub(pivot).normalize();
+  const bq = new THREE.Quaternion();
+  relAv(s, bone, null, bq);
+  setBoneAv(s, bone, new THREE.Quaternion().setFromUnitVectors(from, to).multiply(bq));
+}
+function armIK(s, side, target) {             // two-bone IK: shoulder -> elbow -> wrist onto the tracked hand
+  const [ua, la, wr] = ARM[side].map(n => s.byName[n]);
+  const S = new THREE.Vector3(), E = new THREE.Vector3(), W = new THREE.Vector3();
+  relAv(s, ua, S); relAv(s, la, E); relAv(s, wr, W);
+  const a = S.distanceTo(E), b = E.distanceTo(W);
+  const toT = target.clone().sub(S);
+  const d = THREE.MathUtils.clamp(toT.length(), 1e-4, a + b - 1e-4);
+  const dir = toT.normalize();
+  const pv = POLE[side].clone().sub(S);
+  const bend = pv.sub(dir.clone().multiplyScalar(pv.dot(dir))).normalize();
+  const cosA = THREE.MathUtils.clamp((a * a + d * d - b * b) / (2 * a * d), -1, 1);
+  const elbow = S.clone().addScaledVector(dir, cosA * a).addScaledVector(bend, Math.sqrt(1 - cosA * cosA) * a);
+  aim(s, ua, S, E, elbow);
+  relAv(s, la, E); relAv(s, wr, W);
+  aim(s, la, E, W, S.clone().addScaledVector(dir, d));
+}
+
+function bindSkin(mesh, bones, inverses) {
+  // Unity bind poses already hold mesh -> bone, so the mesh itself sits at the world
+  // origin and the bones carry the whole transform (map mirror, body pose, scale).
+  mesh.bindMode = THREE.DetachedBindMode;
+  mesh.bind(new THREE.Skeleton(bones, inverses), new THREE.Matrix4());
+  mesh.frustumCulled = false;
+  mesh.matrixAutoUpdate = false;
+  scene.add(mesh);
+  return mesh;
+}
+// Cosmetics: the game's own meshes (tools/export_view_cosmetics.py -> /editor/view/a/cos/),
+// skinned to the same bones as the body by bone name. "key[color]" variants are tinted.
+let COS_INDEX = null;
+const cosIndexReady = fetch(ASSETS + "cos/index.json").then(r => r.ok ? r.json() : {}).then(j => { COS_INDEX = j; })
+                                                       .catch(() => { COS_INDEX = {}; });
+const cosGeo = {};                            // mesh name -> Promise<{geo, inv, bones}>
+function loadCos(name) {
+  if (!cosGeo[name]) cosGeo[name] = fetch(ASSETS + "cos/" + name + ".json").then(r => r.json()).then(m => ({
+    geo: rigGeo(m, true), inv: m.bind.map(a => new THREE.Matrix4().fromArray(a)), bones: m.bones, col: !!m.col }));
+  return cosGeo[name];
+}
+const COS_PAL = { yellow: "#f2d14b", red: "#d9433b", blue: "#3b74d9", green: "#4fb85a", purple: "#8a55c9",
+                  pink: "#f08ac0", orange: "#f08a3b", black: "#3a3a3a", white: "#ffffff", brown: "#8a5a3b",
+                  grey: "#9a9a9a", gray: "#9a9a9a", cyan: "#4cc9d9", teal: "#3aa39a" };
+async function addCosmetics(s, keys) {
+  if (!keys.length) return;
+  await cosIndexReady;
+  for (const k of keys) {
+    const m = /^([^\[]+)(?:\[([A-Za-z]+)\])?$/.exec(k);
+    const names = m && COS_INDEX[m[1]];
+    if (!names) continue;
+    for (const nm of names) {
+      let c;
+      try { c = await loadCos(nm); } catch (_) { continue; }
+      if (s.gone) return;
+      const bones = c.bones.map(b => s.byName[b]);
+      if (bones.some(b => !b)) continue;
+      const mat = c.col ? new THREE.MeshLambertMaterial({ vertexColors: true })
+                        : new THREE.MeshLambertMaterial({ map: tex("global-color-palette", true) });
+      if (m[2] && COS_PAL[m[2].toLowerCase()]) mat.color = new THREE.Color(COS_PAL[m[2].toLowerCase()]);
+      s.extra.push(bindSkin(new THREE.SkinnedMesh(c.geo, mat), bones, c.inv));
+    }
+  }
+}
+function removePlayer(s) { s.gone = true; root.remove(s.outer); for (const m of s.extra) scene.remove(m); }
+
+function makePlayer(p) {
+  const skinCol = new THREE.Color(p.skin || `hsl(${hue(p.id || p.n)}, 45%, 72%)`);
+  const outer = new THREE.Group();                     // body pose, cells
+  const av = new THREE.Group();                        // metres
+  av.scale.setScalar(2);
+  outer.add(av);
+  const s = { outer, av, name: p.n, t: p.t, skin: p.skin, data: p, extra: [], cur: {},
+              pos: new THREE.Vector3(p.x, p.y, p.z), rot: q4(p.q || [0, 0, 0, 1]) };
+  outer.position.copy(s.pos);
+  outer.quaternion.copy(s.rot);
+  if (RIG) {
+    const J = RIG.j;
+    const bones = J.nodes.map(n => {
+      const b = new THREE.Bone();
+      b.name = n.n;
+      b.position.fromArray(n.t); b.quaternion.fromArray(n.r); b.scale.fromArray(n.s);
+      return b;
+    });
+    J.nodes.forEach((n, i) => (n.p >= 0 ? bones[n.p] : av).add(bones[i]));
+    s.bones = bones;
+    s.rest = bones.map(b => b.quaternion.clone());
+    s.byName = {};
+    J.nodes.forEach((n, i) => { if (!(n.n in s.byName)) s.byName[n.n] = bones[i]; });
+    const skinMat = new THREE.MeshLambertMaterial({ color: skinCol });
+    const palMat = J.body.col ? new THREE.MeshLambertMaterial({ vertexColors: true })
+                              : new THREE.MeshLambertMaterial({ map: tex("global-color-palette", true) });
+    s.extra.push(bindSkin(new THREE.SkinnedMesh(RIG.body, [skinMat, palMat]), J.body.bones.map(i => bones[i]), RIG.bodyInv));
+    for (const side of ["r", "l"]) {
+      if (J.hands[side]) s.extra.push(bindSkin(new THREE.SkinnedMesh(RIG.hand, skinMat), J.hands[side].map(i => bones[i]), RIG.handInv));
+    }
+    addCosmetics(s, p.cos || []);
+    const eyeMat = new THREE.MeshLambertMaterial({ map: eyeTex(p.eye || "#8c86b7"), alphaTest: .4, side: THREE.DoubleSide });
+    for (const i of J.eyes) bones[i].add(new THREE.Mesh(quadGeo, eyeMat));
+    // rest rotations in the body frame: tracking "no turn" = the rest pose
+    outer.updateMatrixWorld(true);
+    s.headRest = new THREE.Quaternion();
+    relAv(s, s.byName.Head, null, s.headRest);
+    s.wristRest = {};
+    for (const side of ["r", "l"]) { s.wristRest[side] = new THREE.Quaternion(); relAv(s, s.byName[ARM[side][2]], null, s.wristRest[side]); }
+  } else {                                             // until the rig loads
+    const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.17, 0.25, 4, 12), new THREE.MeshLambertMaterial({ color: skinCol }));
+    body.position.y = -0.05;
+    av.add(body);
+  }
+  s.tag = nameTag(p.n || "?", p.t ? "#e8b84a" : "#ffffff");
+  s.tag.position.y = 1.0;
+  outer.add(s.tag);
+  if (p.t) {
+    const ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0xe8b84a, transparent: true, opacity: .8 }));
+    ring.position.y = -0.9;
+    outer.add(ring);
+  }
+  poseRig(s, p, 1);
+  return s;
+}
+
+function poseRig(s, p, k) {
+  if (!s.bones) return;
+  const cur = s.cur;
+  for (const key of ["h", "r", "l"]) {                 // smooth the tracking
+    const t = p[key];
+    if (!t) continue;
+    if (!cur[key]) cur[key] = { p: v3(t), q: q4(t.slice(3, 7)), f: t.slice(7, 10) };
+    else {
+      cur[key].p.lerp(v3(t), k);
+      cur[key].q.slerp(q4(t.slice(3, 7)), k);
+      if (t.length >= 10) cur[key].f = cur[key].f.map((x, i) => x + (t[7 + i] - x) * k);
+    }
+  }
+  s.bones.forEach((b, i) => b.quaternion.copy(s.rest[i]));   // from the rest pose every frame
+  s.outer.updateMatrixWorld(true);
+  if (cur.h) setBoneAv(s, s.byName.Head, tmpQ.multiplyQuaternions(cur.h.q, s.headRest));
+  for (const side of ["r", "l"]) {
+    const c = cur[side];
+    if (!c) continue;
+    armIK(s, side, c.p);
+    setBoneAv(s, s.byName[ARM[side][2]], tmpQ.multiplyQuaternions(c.q, s.wristRest[side]));
+    if (c.f && c.f.length === 3) {
+      s.byName[ARM[side][2]].traverse(b => {
+        const m = /^Finger(Index|Middle|Thumb)\d$/.exec(b.name);
+        if (!m) return;
+        const v = m[1] === "Index" ? c.f[0] : m[1] === "Middle" ? c.f[1] : c.f[2];
+        b.quaternion.multiply(curlQ.setFromAxisAngle(CURL_AXES[m[1]], -v * CURL[m[1]]));
+      });
+    }
+  }
+}
+
+let listSig = "";
+function updatePlayers(list) {
+  const seen = new Set();
+  for (const p of list) {
+    seen.add(p.a);
+    let s = players.get(p.a);
+    const cosSig = (p.cos || []).join(",");
+    if (s && (s.name !== p.n || s.t !== p.t || (p.skin && s.skin !== p.skin) || (p.cos && s.cosSig !== cosSig))) { removePlayer(s); s = null; }
+    if (!s) { s = makePlayer(p); s.cosSig = cosSig; root.add(s.outer); players.set(p.a, s); }
+    s.pos.set(p.x, p.y, p.z);
+    if (p.q) s.rot.copy(q4(p.q));
+    s.data = p;
+  }
+  for (const [a, s] of players) if (!seen.has(a)) { removePlayer(s); players.delete(a); }
+  const sig = list.map(p => p.a + ":" + p.n + ":" + p.t).join("|");
+  if (sig !== listSig) { listSig = sig; renderPlist(list); fillTargets(list); }
+}
+
+function renderPlist(list) {
+  const el = $("plist");
+  el.textContent = "";
+  if (!list.length) { el.textContent = "nobody yet"; return; }
+  for (const p of [...list].sort((a, b) => (b.t - a.t) || (a.n || "").localeCompare(b.n || ""))) {
+    const row = document.createElement("div");
+    const n = document.createElement("span");
+    n.textContent = p.n || "?";
+    const sw = document.createElement("span");
+    sw.className = "muted";
+    sw.textContent = followActor === p.a ? "following" : "follow";
+    row.append(n, sw);
+    row.onclick = () => { followActor = p.a; $("follow").checked = true; listSig = ""; renderPlist(list); focusOn(p.a); };
+    el.append(row);
+  }
+}
+let followActor = null;
+function focusOn(actor) {
+  const s = players.get(actor);
+  if (!s) return;
+  const wp = s.outer.getWorldPosition(new THREE.Vector3());
+  const off = camera.position.clone().sub(controls.target).setLength(24);
+  controls.target.copy(wp);
+  camera.position.copy(wp).add(off);
+}
+
+// ---------- maps ----------
+let lastView = {};
+async function loadMaps() {
+  try {
+    const d = await api("/players");
+    const groups = new Map();
+    for (const p of d.players) {
+      const k = p.photonRoom || p.roomKey || "?";
+      if (!groups.has(k)) groups.set(k, { key: k, photon: p.photonRoom, rk: p.roomKey,
+                                          name: p.roomName || p.roomKey || "?", players: [] });
+      groups.get(k).players.push(p);
+    }
+    const list = [...groups.values()].sort((a, b) => b.players.length - a.players.length || a.name.localeCompare(b.name));
+    const seenName = {};
+    const el = $("maps");
+    el.textContent = "";
+    $("mapcount").textContent = list.length ? `(${list.length})` : "";
+    if (!list.length) { el.textContent = "nobody is online"; return; }
+    for (const g of list) {
+      seenName[g.name] = (seenName[g.name] || 0) + 1;
+      const card = document.createElement("div");
+      const cur = lastView.room && (g.photon ? g.photon === lastView.room : g.rk === lastView.rk);
+      card.className = "map" + (cur ? " cur" : "");
+      const top = document.createElement("div");
+      top.className = "top";
+      const nm = document.createElement("span");
+      nm.className = "nm";
+      nm.textContent = g.name + (seenName[g.name] > 1 ? ` #${seenName[g.name]}` : "") + `  (${g.players.length})`;
+      const btn = document.createElement("button");
+      btn.textContent = cur ? "Watching" : "Watch";
+      btn.disabled = !!cur;
+      btn.onclick = () => watchMap(g);
+      top.append(nm, btn);
+      const who = document.createElement("div");
+      who.className = "who";
+      who.textContent = g.players.map(p => p.name).join(", ");
+      card.append(top, who);
+      el.append(card);
+    }
+  } catch (e) { /* retried */ }
+}
+async function watchMap(g) {
+  say("sending the bot to " + g.name + " - it takes a few seconds");
+  try {
+    await post("/start", { target: g.players[0].accountID, stay: true });
+    clearBlocks();
+    shown = { rev: -1, sid: "" };
+    for (const s of players.values()) removePlayer(s);
+    players.clear();
+    followActor = null;
+  } catch (e) { say(e.message); }
+}
+
+// ---------- building ----------
+let mode = "look", color = "default", fwd = 4, up = 2;
+const ghost = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
+                                     new THREE.LineBasicMaterial({ color: 0x45a386, depthTest: false }));
+ghost.renderOrder = 5;
+ghost.visible = false;
+root.add(ghost);
+const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+const colorFor = n => color === "default" ? (CAT.defaults[n] || "brown_light") : color;
+const curPat = () => $("pat").value.trim();
+function showFacing() { $("facing").textContent = "facing " + DN[fwd] + ", top " + DN[up]; }
+
+function hitTest(ev) {
+  const r = canvas.getBoundingClientRect();
+  ndc.set(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  const objs = [];
+  for (const b of blocks.values()) if (b.mesh) objs.push(b.mesh.children[0]);
+  if (floor) objs.push(floor);
+  const h = ray.intersectObjects(objs, false)[0];
+  if (!h || !dimsRoom) return null;
+  const lp = root.worldToLocal(h.point.clone());
+  const ext = extent(curPat(), fwd, up);
+  const fl = v => Math.floor(v + 1e-6);
+  if (h.object === floor) {
+    return { cell: [fl(lp.x - ext[0] / 2 + .5), 0, fl(lp.z - ext[2] / 2 + .5)], block: null, ext };
+  }
+  const hb = h.object.userData.block;
+  const n = h.face.normal;
+  const he = extent(hb.name, hb.fwd, hb.up);
+  const ax = Math.abs(n.x) > .5 ? 0 : Math.abs(n.y) > .5 ? 1 : 2, sg = [n.x, n.y, n.z][ax] > 0 ? 1 : -1;
+  const lo = [hb.x, hb.y, hb.z];
+  const cell = [0, 1, 2].map(i => i === ax ? 0 : fl([lp.x, lp.y, lp.z][i] - ext[i] / 2 + .5));
+  cell[ax] = sg > 0 ? lo[ax] + he[ax] : lo[ax] - ext[ax];
+  return { cell, block: hb, ext };
+}
+function actionAt(h) {
+  if (!h) return null;
+  if (mode === "build") {
+    const inside = h.cell.every((v, i) => v >= 0 && v + h.ext[i] <= dimsRoom[i]);
+    return { op: "put", cell: h.cell, size: h.ext, ok: inside && isFree(h.cell, h.ext) };
+  }
+  if (mode === "erase" && h.block) {
+    const b = h.block;
+    return { op: "del", cell: [b.x, b.y, b.z], size: extent(b.name, b.fwd, b.up), ok: true };
+  }
+  return null;
+}
+// The Map Maker's see-through preview of the real model where the block will land.
+const ghostModel = new THREE.Group();
+ghostModel.visible = false;
+root.add(ghostModel);
+let ghostKey = "";
+const seeThrough = new Map();
+function ghostMat(m) {
+  if (!seeThrough.has(m)) { const g = m.clone(); g.transparent = true; g.opacity = .45; g.depthWrite = false; seeThrough.set(m, g); }
+  return seeThrough.get(m);
+}
+function showGhostModel(a) {
+  if (!a || a.op !== "put") { ghostModel.visible = false; return; }
+  const name = curPat(), col = colorFor(name), key = name + "|" + col + "|" + fwd + "|" + up;
+  if (key !== ghostKey) {
+    ghostKey = key;
+    ghostModel.clear();
+    const inner = new THREE.Group();
+    inner.applyMatrix4(rotMatrix(fwd, up));
+    inner.scale.multiplyScalar(2);
+    ghostModel.add(inner);
+    loadModel(name).then(parts => {
+      if (ghostKey !== key) return;
+      for (const p of parts) for (const m of partMeshes(p, col)) { m.material = ghostMat(m.material); inner.add(m); }
+    }).catch(() => {});
+  }
+  ghostModel.position.set(a.cell[0] + a.size[0] / 2, a.cell[1] + a.size[1] / 2, a.cell[2] + a.size[2] / 2);
+  ghostModel.visible = true;
+}
+function showGhost(ev) {
+  const a = mode === "look" ? null : actionAt(hitTest(ev));
+  showGhostModel(a);
+  if (!a) { ghost.visible = false; return; }
+  ghost.material.color.setHex(a.op === "del" ? 0xe26a6a : a.ok ? 0x45a386 : 0xe26a6a);
+  ghost.scale.set(a.size[0] + .04, a.size[1] + .04, a.size[2] + .04);
+  ghost.position.set(a.cell[0] + a.size[0] / 2, a.cell[1] + a.size[1] / 2, a.cell[2] + a.size[2] / 2);
+  ghost.visible = true;
+}
+async function edit(a) {
+  if (a.op === "put" && !a.ok) { say("something is already there (or it's outside the map)"); return; }
+  const body = { op: a.op, x: a.cell[0], y: a.cell[1], z: a.cell[2] };
+  if (a.op === "put") Object.assign(body, { pattern: curPat(), color: colorFor(curPat()), fwd, up });
+  try {
+    await post("/view/edit", body);
+    say((a.op === "put" ? "placing " + body.pattern + " (" + body.color + ")" : "removing") + " at " + a.cell.join(", "));
+  } catch (e) { say(e.message); }
+}
+
+let lastMove = null, moveQueued = false, down = null;
+canvas.addEventListener("pointermove", ev => {
+  lastMove = ev;
+  if (moveQueued) return;
+  moveQueued = true;
+  requestAnimationFrame(() => { moveQueued = false; showGhost(lastMove); });
+});
+canvas.addEventListener("pointerleave", () => { ghost.visible = false; ghostModel.visible = false; });
+canvas.addEventListener("contextmenu", ev => ev.preventDefault());
+canvas.addEventListener("mousedown", ev => { if (ev.button === 1) ev.preventDefault(); });
+// Turn around what you're looking at, not the middle of the map: at the start of every
+// drag the pivot moves to whatever is in the centre of the view (same direction, so no jump).
+const centre = new THREE.Vector2(0, 0), fwdV = new THREE.Vector3();
+function pivotOnView() {
+  ray.setFromCamera(centre, camera);
+  const objs = [];
+  for (const b of blocks.values()) if (b.mesh) objs.push(b.mesh.children[0]);
+  if (floor) objs.push(floor);
+  const h = ray.intersectObjects(objs, false)[0];
+  const dist = h ? h.distance : camera.position.distanceTo(controls.target);
+  camera.getWorldDirection(fwdV);
+  controls.target.copy(camera.position).addScaledVector(fwdV, Math.max(1.5, dist));
+}
+canvas.addEventListener("pointerdown", ev => {
+  down = { x: ev.clientX, y: ev.clientY, b: ev.button };
+  if (ev.button === 2) { startFreeLook(ev); return; }
+  if (!$("follow").checked) pivotOnView();
+});
+// Hold the right button = fly camera: the mouse turns the camera around itself (the
+// pivot is the camera), WASD flies where you look, Space up, Shift (or Q) down, E up.
+// While flying, Space is up instead of push-to-talk.
+// A right click without moving still erases in Build / Erase.
+let freeLook = null, shiftHeld = false, spaceHeld = false;
+const lookEul = new THREE.Euler(0, 0, 0, "YXZ"), lookFwd = new THREE.Vector3();
+function aimTarget() {       // OrbitControls looks at its target every frame: keep it just ahead
+  camera.getWorldDirection(lookFwd);
+  controls.target.copy(camera.position).addScaledVector(lookFwd, freeLook.dist);
+}
+function startFreeLook(ev) {
+  freeLook = { dist: Math.max(4, Math.min(40, camera.position.distanceTo(controls.target))) };
+  $("follow").checked = false;
+  try { canvas.setPointerCapture(ev.pointerId); } catch (_) {}
+}
+canvas.addEventListener("pointermove", ev => {
+  if (!freeLook || !(ev.buttons & 2)) return;
+  lookEul.setFromQuaternion(camera.quaternion);
+  lookEul.y -= ev.movementX * 0.004;
+  lookEul.x = Math.max(-1.55, Math.min(1.55, lookEul.x - ev.movementY * 0.004));
+  lookEul.z = 0;
+  camera.quaternion.setFromEuler(lookEul);
+  aimTarget();
+  if (Math.hypot(ev.clientX - (down ? down.x : ev.clientX), ev.clientY - (down ? down.y : ev.clientY)) > 6)
+    canvas.style.cursor = "none";
+});
+function endFreeLook() { freeLook = null; canvas.style.cursor = ""; }
+canvas.addEventListener("pointerup", ev => { if (ev.button === 2) endFreeLook(); });
+canvas.addEventListener("lostpointercapture", endFreeLook);
+window.addEventListener("keydown", ev => {
+  if (ev.key === "Shift") shiftHeld = true;
+  if (ev.code === "Space" && freeLook) { spaceHeld = true; ev.preventDefault(); }
+});
+window.addEventListener("keyup", ev => {
+  if (ev.key === "Shift") shiftHeld = false;
+  if (ev.code === "Space") spaceHeld = false;
+});
+window.addEventListener("blur", () => { shiftHeld = false; spaceHeld = false; });
+// Map Maker clicks: left = the tool, right = erase, middle or Alt+left = pick the block,
+// Shift+left = erase. Only in Build / Erase, so a stray click in Look can't change a live map.
+canvas.addEventListener("pointerup", ev => {
+  const d = down;
+  down = null;
+  if (!d || Math.hypot(ev.clientX - d.x, ev.clientY - d.y) > 6) return;   // a drag, not a click
+  const h = hitTest(ev);
+  if (!h) return;
+  if (d.b === 1 || (d.b === 0 && ev.altKey)) { if (h.block) pick(h.block); return; }
+  if (mode === "look") return;
+  if (d.b === 2 || (d.b === 0 && ev.shiftKey) || mode === "erase") {
+    if (h.block) edit({ op: "del", cell: [h.block.x, h.block.y, h.block.z], ok: true });
+    return;
+  }
+  if (d.b === 0) { const a = actionAt(h); if (a) edit(a); }
+});
+function pick(b) {             // copy a block's type, colour and facing into the build tool
+  $("pat").value = b.name;
+  fwd = b.fwd; up = b.up;
+  color = b.color || "default";
+  document.querySelectorAll(".sw").forEach(x => x.classList.toggle("on", x.title === color));
+  $("colname").textContent = color;
+  showFacing();
+  if (mode === "look") setMode("build");
+  say("picked " + b.name + " (" + b.color + ")");
+}
+
+function setMode(m) {
+  mode = m;
+  document.querySelectorAll("#modes button").forEach(b => b.classList.toggle("on", b.dataset.m === m));
+  ghost.visible = false;
+  ghostModel.visible = false;
+}
+const dirIdx = v => DIRS.findIndex(d => d[0] === v[0] && d[1] === v[1] && d[2] === v[2]);
+// Same as the Map Maker: every press is one quarter turn.
+const turn = () => { fwd = dirIdx(cross(DIRS[up], DIRS[fwd])); showFacing(); if (lastMove) showGhost(lastMove); };
+const tip = () => { const u = up; up = fwd; fwd = dirIdx(DIRS[u].map(v => -v)); showFacing(); if (lastMove) showGhost(lastMove); };
+document.querySelectorAll("#modes button").forEach(b => { b.onclick = () => setMode(b.dataset.m); });
+$("turn").onclick = turn;
+$("flip").onclick = tip;
+// WASD / arrow keys slide the camera, Q / E lower and raise it (speed grows with zoom).
+const MOVE_KEYS = { w: [1, 0, 0], s: [-1, 0, 0], a: [0, -1, 0], d: [0, 1, 0], arrowup: [1, 0, 0], arrowdown: [-1, 0, 0],
+                    arrowleft: [0, -1, 0], arrowright: [0, 1, 0], q: [0, 0, -1], e: [0, 0, 1] };
+const held = new Set();
+window.addEventListener("keyup", ev => held.delete(ev.key.toLowerCase()));
+window.addEventListener("blur", () => held.clear());
+window.addEventListener("keydown", ev => {
+  if (ev.target.matches("input, select, textarea") || ev.ctrlKey || ev.metaKey) return;
+  const k = ev.key.toLowerCase();
+  if (MOVE_KEYS[k]) { held.add(k); ev.preventDefault(); $("follow").checked = false; return; }
+  if (k === "escape") setMode("look");
+  else if (k === "t") turn();
+  else if (k === "r") tip();
+  else if (k === "1") setMode("build");
+  else if (k === "3") setMode("erase");
+  else if (k === "l") setMode("look");
+});
+function flyStep(dt) {
+  if (freeLook) {              // fly where the camera looks (up/down too), steady speed
+    const f = new THREE.Vector3(), v = new THREE.Vector3();
+    camera.getWorldDirection(f);
+    const r = new THREE.Vector3().crossVectors(f, camera.up).normalize();
+    for (const k of held) {
+      const m = MOVE_KEYS[k];
+      if (m[0]) v.addScaledVector(f, m[0]);
+      if (m[1]) v.addScaledVector(r, m[1]);
+      if (m[2]) v.y += m[2];
+    }
+    if (spaceHeld) v.y += 1;
+    if (shiftHeld) v.y -= 1;
+    if (v.lengthSq()) v.normalize().multiplyScalar(20 * dt);
+    camera.position.add(v);
+    aimTarget();
+    return;
+  }
+  if (!held.size) return;
+  const f = new THREE.Vector3();
+  camera.getWorldDirection(f);
+  f.y = 0;
+  f.normalize();
+  const r = new THREE.Vector3().crossVectors(f, camera.up).normalize();
+  const v = new THREE.Vector3(), sp = Math.max(8, camera.position.distanceTo(controls.target)) * dt;
+  for (const k of held) {
+    const m = MOVE_KEYS[k];
+    if (m[0]) v.addScaledVector(f, m[0]);
+    if (m[1]) v.addScaledVector(r, m[1]);
+    if (m[2]) v.y += m[2];
+  }
+  v.multiplyScalar(sp);
+  camera.position.add(v);
+  controls.target.add(v);
+}
+
+// ---------- side panel ----------
+for (const p of QUICK) {
+  const b = document.createElement("button");
+  b.textContent = p;
+  b.onclick = () => { $("pat").value = p; if (mode === "look") setMode("build"); };
+  $("quick").append(b);
+}
+function addSwatch(name, css, cls) {
+  const b = document.createElement("button");
+  b.className = "sw" + (cls ? " " + cls : "") + (name === color ? " on" : "");
+  b.title = name;
+  if (css) b.style.background = css;
+  b.onclick = () => {
+    color = name;
+    document.querySelectorAll(".sw").forEach(x => x.classList.toggle("on", x === b));
+    $("colname").textContent = name;
+  };
+  $("cols").append(b);
+}
+addSwatch("default", null, "def");
+for (const [name, css] of Object.entries(COLORS)) if (!/emissive|plush_/.test(name)) addSwatch(name, css);
+for (const [name, css] of Object.entries(COLORS)) if (/emissive/.test(name)) addSwatch(name, css);
+showFacing();
+// Blocks are only drawn once the real sizes are known: a block drawn before index.json
+// arrived used the size in its name (often wrong) and sat in the wrong place.
+const indexReady = fetch(ASSETS + "index.json").then(r => r.json()).then(j => { INDEX = j; occ = null; }).catch(() => {});
+const catReady = fetch(ASSETS + "categories.json").then(r => r.json()).then(j => { CAT = j; }).catch(() => {});
+const sizesReady = api("/view/patterns").then(r => { PATS = r.patterns || []; SIZES = r.sizes || {}; occ = null; }).catch(() => {});
+const catalogReady = Promise.all([indexReady, sizesReady]);
+const blockLabel = n => (CAT.names && CAT.names[n] && CAT.names[n] !== n) ? `${CAT.names[n]}  (${n})` : n;
+function fillPats() {
+  const c = $("patcat").value, q = $("patq").value.trim().toLowerCase();
+  let list = PATS;
+  if (c === "__other") {
+    const inCat = new Set((CAT.cats || []).flatMap(x => x.blocks));
+    list = PATS.filter(p => !inCat.has(p));
+  } else if (c) {
+    const cat = (CAT.cats || []).find(x => x.name === c);
+    const have = new Set(PATS);
+    list = cat ? cat.blocks.filter(p => have.has(p)) : [];
+  }
+  if (q) list = list.filter(p => p.toLowerCase().includes(q) || ((CAT.names || {})[p] || "").toLowerCase().includes(q));
+  const el = $("patlist");
+  el.textContent = "";
+  for (const p of list.slice(0, 2000)) el.append(new Option(blockLabel(p), p));
+}
+Promise.all([catReady, sizesReady]).then(() => {
+  const sel = $("patcat");
+  sel.options[0].textContent = `All blocks (${PATS.length})`;
+  for (const c of CAT.cats || []) sel.append(new Option(`${c.name} (${c.blocks.length})`, c.name));
+  const inCat = new Set((CAT.cats || []).flatMap(x => x.blocks));
+  if (PATS.some(p => !inCat.has(p))) sel.append(new Option("Other", "__other"));
+  fillPats();
+});
+$("patcat").onchange = fillPats;
+$("patq").oninput = fillPats;
+$("patlist").onchange = () => {
+  $("pat").value = $("patlist").value;
+  if (mode === "look") setMode("build");
+  if (lastMove) showGhost(lastMove);
+};
+$("stop").onclick = async () => {
+  try { const r = await post("/stop"); say(r.was ? "bot disconnected" : "the bot wasn't running"); }
+  catch (e) { say(e.message); }
+};
+// Hide / Show: the bot's player model leaves the game (or comes back); it stays in the room.
+let botHidden = false;
+$("hidebot").onclick = async () => {
+  try {
+    await post("/cmd", { cmd: botHidden ? "vshow" : "vhide" });
+    botHidden = !botHidden;
+    $("hidebot").textContent = botHidden ? "Show" : "Hide";
+    say(botHidden ? "your bot's model is hidden" : "your bot's model is back");
+  } catch (e) { say(e.message); }
+};
+
+// A small picture of the bot's own pose (bottom right): seen from in front of it, since in
+// the big view it sits right at the camera.
+const poseCam = new THREE.PerspectiveCamera(40, 1, 0.05, 500);
+const _pc1 = new THREE.Vector3(), _pc2 = new THREE.Vector3();
+function botMe() { for (const s of players.values()) if (s.data && s.data.me) return s; return null; }
+// Bubbles on the head and hands (only in the little picture: layer 1): drag one to move
+// that part. Positions are body-local metres (the avatar group's frame), sent as
+// "vlimb PART X Y Z"; the bot keeps them until Reset pose.
+const LIMBS = { head: "h", right: "r", left: "l" };
+const LIMB_COL = { head: 0xe8b84a, right: 0x3c9fff, left: 0x33cc99 };
+const bubbles = {};
+for (const part in LIMBS) {
+  const m = new THREE.Mesh(new THREE.SphereGeometry(0.22, 16, 12),
+                           new THREE.MeshBasicMaterial({ color: LIMB_COL[part], transparent: true, opacity: 0.75, depthTest: false }));
+  m.renderOrder = 20; m.layers.set(1); m.userData.part = part;
+  scene.add(m); bubbles[part] = m;
+}
+poseCam.layers.enable(1);
+const limbHeld = {};                          // part -> [x, y, z] while / after dragging
+const poseBox = { x: 0, y: 0, sz: 0 };        // the picture, in canvas CSS px from the top left
+function limbLocal(me, part) {
+  if (limbHeld[part]) return limbHeld[part];
+  const t = me.data[LIMBS[part]];
+  return t ? t.slice(0, 3) : null;
+}
+function drawPose(me) {
+  const w = canvas.clientWidth, h = canvas.clientHeight, sz = Math.round(Math.min(w, h) * 0.22);
+  if (sz < 60) { poseBox.sz = 0; return; }
+  Object.assign(poseBox, { x: 10, y: h - 10 - sz, sz });
+  const was = me.outer.visible;
+  me.outer.visible = true;
+  me.outer.updateMatrixWorld(true);
+  for (const part in bubbles) {
+    const l = limbLocal(me, part), b = bubbles[part];
+    b.visible = !!l;
+    if (l) b.position.copy(me.av.localToWorld(_pc1.set(l[0], l[1], l[2])));
+  }
+  me.outer.localToWorld(_pc1.set(0, 0.8, 5));       // 2.5 m in front of it, a little up
+  me.outer.localToWorld(_pc2.set(0, 0.2, 0));
+  poseCam.position.copy(_pc1); poseCam.up.set(0, 1, 0); poseCam.lookAt(_pc2);
+  poseCam.updateMatrixWorld(true);
+  renderer.setScissorTest(true);
+  renderer.setViewport(10, 10, sz, sz); renderer.setScissor(10, 10, sz, sz);
+  renderer.render(scene, poseCam);
+  renderer.setScissorTest(false);
+  renderer.setViewport(0, 0, w, h);
+  me.outer.visible = was;
+}
+let limbDrag = null, limbSentAt = 0;
+const limbRay = new THREE.Raycaster(), limbPlane = new THREE.Plane(), _lp = new THREE.Vector3();
+limbRay.layers.set(1);
+function poseNdc(ev) {
+  const r = canvas.getBoundingClientRect(), x = ev.clientX - r.left, y = ev.clientY - r.top;
+  if (!poseBox.sz || !$("poseview").checked || x < poseBox.x || x > poseBox.x + poseBox.sz
+      || y < poseBox.y || y > poseBox.y + poseBox.sz) return null;
+  return new THREE.Vector2((x - poseBox.x) / poseBox.sz * 2 - 1, -((y - poseBox.y) / poseBox.sz * 2 - 1));
+}
+function sendLimb(part, force) {
+  const now = performance.now();
+  if (!force && now - limbSentAt < 90) return;
+  limbSentAt = now;
+  const l = limbHeld[part];
+  post("/cmd", { cmd: `vlimb ${part} ${l.map(v => v.toFixed(3)).join(" ")}` }).catch(() => {});
+}
+window.addEventListener("pointerdown", ev => {
+  if (ev.target !== canvas) return;
+  const ndc = poseNdc(ev), me = botMe();
+  if (!ndc) return;
+  ev.stopImmediatePropagation(); ev.preventDefault();          // the picture isn't the map
+  if (!me) return;
+  limbRay.setFromCamera(ndc, poseCam);
+  const hit = limbRay.intersectObjects(Object.values(bubbles).filter(b => b.visible))[0];
+  if (!hit) return;
+  const part = hit.object.userData.part;
+  poseCam.getWorldDirection(_lp);
+  limbPlane.setFromNormalAndCoplanarPoint(_lp, hit.object.position);
+  limbDrag = { part, me };
+  canvas.setPointerCapture(ev.pointerId);
+}, true);
+window.addEventListener("pointermove", ev => {
+  if (!limbDrag) return;
+  ev.stopImmediatePropagation();
+  const r = canvas.getBoundingClientRect();
+  const ndc = new THREE.Vector2((ev.clientX - r.left - poseBox.x) / poseBox.sz * 2 - 1,
+                                -((ev.clientY - r.top - poseBox.y) / poseBox.sz * 2 - 1));
+  limbRay.setFromCamera(ndc, poseCam);
+  if (!limbRay.ray.intersectPlane(limbPlane, _lp)) return;
+  const l = limbDrag.me.av.worldToLocal(_lp.clone());
+  limbHeld[limbDrag.part] = [l.x, l.y, l.z].map(v => Math.max(-1.5, Math.min(1.5, v)));
+  sendLimb(limbDrag.part);
+}, true);
+window.addEventListener("pointerup", ev => {
+  if (!limbDrag) return;
+  ev.stopImmediatePropagation();
+  sendLimb(limbDrag.part, true);
+  limbDrag = null;
+}, true);
+$("posereset").onclick = async () => {
+  for (const k in limbHeld) delete limbHeld[k];
+  try { await post("/cmd", { cmd: "vlimb reset" }); say("pose reset"); } catch (e) { say(e.message); }
+};
+$("fit").onclick = () => { $("follow").checked = false; fitRoom(); };
+$("refresh").onclick = () => {             // throw away what's drawn and load the map again
+  clearBlocks();
+  shown = { rev: -1, sid: "" };
+  for (const s of players.values()) removePlayer(s);
+  players.clear();
+  listSig = "";
+  loadBlocks();
+  loadMaps();
+  say("map reloaded");
+};
+$("top").onclick = topView;
+
+// ---------- voice: hear the map, push to talk (the same link as the editor's Talk tab) ----------
+// Bot talk mode relays the room's voice chat over /editor/api/photon/talk: in = [1, who(u16),
+// PCM16 @24 kHz], out = PCM16 @48 kHz in 960-sample frames. Listening starts by itself once the
+// view is live (after one click: browsers won't play sound before that); the microphone is only
+// opened when you talk.
+const VC = { ws: null, ctx: null, gain: null, stream: null, node: null, held: false, space: false, open: false,
+             play: {}, heard: {}, names: {}, acc: new Int16Array(960), accN: 0, rs: { pos: 0, last: 0 },
+             level: 0, inLevel: 0, gesture: false, connecting: false, retryAt: 0, status: "" };
+const talking = () => !!VC.ws && !!VC.stream && (VC.held || VC.space || VC.open);
+
+async function vcAudio() {
+  if (!VC.ctx) {
+    try { VC.ctx = new AudioContext({ sampleRate: 48000 }); } catch (_) { VC.ctx = new AudioContext(); }
+    VC.gain = VC.ctx.createGain();
+    VC.gain.gain.value = +$("vvol").value;
+    VC.gain.connect(VC.ctx.destination);
+  }
+  await VC.ctx.resume();
+}
+function vcMic(f32) {
+  let sum = 0;
+  for (let i = 0; i < f32.length; i++) sum += f32[i] * f32[i];
+  VC.level = VC.level * 0.6 + Math.sqrt(sum / f32.length) * 0.4;
+  const ratio = VC.ctx.sampleRate / 48000;
+  const push = v => {
+    const live = talking();
+    VC.acc[VC.accN++] = live ? Math.max(-32768, Math.min(32767, Math.round(v * 32767))) : 0;
+    if (VC.accN === 960) {
+      if (live && VC.ws && VC.ws.readyState === 1 && VC.ws.bufferedAmount < 48000) VC.ws.send(VC.acc.slice(0).buffer);
+      VC.accN = 0;
+    }
+  };
+  if (ratio === 1) { for (let i = 0; i < f32.length; i++) push(f32[i]); return; }
+  let pos = VC.rs.pos, last = VC.rs.last;
+  for (let i = 0; i < f32.length; i++) {
+    const cur = f32[i];
+    while (pos <= 1) { push(last + (cur - last) * pos); pos += ratio; }
+    pos -= 1; last = cur;
+  }
+  VC.rs.pos = pos; VC.rs.last = last;
+}
+// 3D voice: each player's voice comes from where they are in the view, heard from the camera.
+// The bot tells us which game actor each voice belongs to (VC.acts); unknown ones play flat.
+VC.acts = {}; VC.pan = {};
+function vcPanner(who) {
+  if (!$("v3d").checked) return VC.gain;
+  let p = VC.pan[who];
+  if (!p) {
+    p = VC.pan[who] = VC.ctx.createPanner();
+    p.panningModel = "HRTF"; p.distanceModel = "inverse";
+    p.refDistance = 6; p.rolloffFactor = 1; p.maxDistance = 10000;    // grid units (6 = 3 m)
+    p.connect(VC.gain);
+  }
+  return p;
+}
+const _v3 = new THREE.Vector3(), _f3 = new THREE.Vector3();
+function vcPlace() {
+  if (!VC.ctx) return;
+  const L = VC.ctx.listener, c = camera.position;
+  camera.getWorldDirection(_f3);
+  if (L.positionX) {
+    L.positionX.value = c.x; L.positionY.value = c.y; L.positionZ.value = c.z;
+    L.forwardX.value = _f3.x; L.forwardY.value = _f3.y; L.forwardZ.value = _f3.z;
+    L.upX.value = camera.up.x; L.upY.value = camera.up.y; L.upZ.value = camera.up.z;
+  } else {
+    L.setPosition(c.x, c.y, c.z);
+    L.setOrientation(_f3.x, _f3.y, _f3.z, camera.up.x, camera.up.y, camera.up.z);
+  }
+  for (const who in VC.pan) {
+    const s = players.get(+VC.acts[who]);
+    if (!s) continue;
+    s.outer.getWorldPosition(_v3);
+    const p = VC.pan[who];
+    if (p.positionX) { p.positionX.value = _v3.x; p.positionY.value = _v3.y + 3; p.positionZ.value = _v3.z; }
+    else p.setPosition(_v3.x, _v3.y + 3, _v3.z);
+  }
+}
+setInterval(vcPlace, 50);
+// A speaker icon over each player while their voice is coming in.
+let _talkTex = null;
+function talkIcon() {
+  if (!_talkTex) {
+    const cv = document.createElement("canvas"); cv.width = cv.height = 64;
+    const c = cv.getContext("2d");
+    c.fillStyle = "rgba(20,17,14,0.8)"; c.beginPath(); c.arc(32, 32, 30, 0, Math.PI * 2); c.fill();
+    c.fillStyle = "#3c9"; c.strokeStyle = "#3c9"; c.lineWidth = 4; c.lineCap = "round";
+    c.beginPath(); c.moveTo(14, 26); c.lineTo(22, 26); c.lineTo(32, 16); c.lineTo(32, 48); c.lineTo(22, 38); c.lineTo(14, 38);
+    c.closePath(); c.fill();
+    c.beginPath(); c.arc(34, 32, 9, -0.9, 0.9); c.stroke();
+    c.beginPath(); c.arc(34, 32, 17, -0.9, 0.9); c.stroke();
+    _talkTex = new THREE.CanvasTexture(cv); _talkTex.colorSpace = THREE.SRGBColorSpace;
+  }
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: _talkTex, depthTest: false, transparent: true, sizeAttenuation: false }));
+  sp.scale.set(0.04, 0.04, 1);
+  sp.center.set(0.5, -0.55);            // sits just above the name tag on screen
+  sp.renderOrder = 11;
+  return sp;
+}
+setInterval(() => {
+  const now = performance.now(), on = new Set();
+  for (const who in VC.heard) if (now - VC.heard[who] < 400 && VC.acts[who] != null) on.add(+VC.acts[who]);
+  for (const [act, s] of players) {
+    const want = on.has(+act);
+    if (want && !s.talk) { s.talk = talkIcon(); s.talk.position.y = 1.0; s.outer.add(s.talk); }
+    if (s.talk) s.talk.visible = want;
+  }
+}, 100);
+function vcHear(buf) {
+  const u8 = new Uint8Array(buf);
+  if (u8[0] !== 1 || !VC.ctx) return;
+  const who = u8[1] | (u8[2] << 8);
+  const pcm = new Int16Array(buf.slice(3));
+  if (!pcm.length) return;
+  const ab = VC.ctx.createBuffer(1, pcm.length, 24000), ch = ab.getChannelData(0);
+  let sum = 0;
+  for (let i = 0; i < pcm.length; i++) { ch[i] = pcm[i] / 32768; sum += ch[i] * ch[i]; }
+  const src = VC.ctx.createBufferSource();
+  src.buffer = ab;
+  src.connect(vcPanner(who));
+  const now = VC.ctx.currentTime;
+  let at = VC.play[who] || 0;
+  if (at < now + 0.05 || at > now + 1.0) at = now + 0.12;     // jitter buffer per speaker
+  src.start(at);
+  VC.play[who] = at + ab.duration;
+  VC.heard[who] = performance.now();
+  VC.inLevel = Math.max(VC.inLevel, Math.sqrt(sum / ch.length));
+}
+async function vcConnect() {
+  if (VC.ws || VC.connecting) return;
+  VC.connecting = true;
+  try {
+    await vcAudio();
+    VC.status = "turning on the bot's voice...";
+    await post("/cmd", { cmd: "talk" });
+    const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + API + "/talk");
+    ws.binaryType = "arraybuffer";
+    VC.ws = ws;
+    VC.play = {};
+    VC.status = "connecting...";
+    ws.onmessage = e => {
+      if (typeof e.data !== "string") { vcHear(e.data); return; }
+      try { const m = JSON.parse(e.data);
+            if (m.type === "status") VC.status = m.msg;
+            else if (m.type === "speakers") { VC.names = m.names || {}; VC.acts = m.actors || {}; } } catch (_) {}
+    };
+    ws.onclose = () => { if (VC.ws === ws) { VC.ws = null; VC.status = "voice dropped - reconnecting"; VC.retryAt = performance.now() + 4000; } };
+  } catch (e) {
+    VC.status = "voice: " + e.message;
+    VC.retryAt = performance.now() + 8000;
+  }
+  VC.connecting = false;
+}
+async function vcMicOn() {                 // the microphone, only once you want to talk
+  if (VC.stream) return true;
+  if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    say("this browser can't use a microphone here (needs https in Chrome or Edge)");
+    return false;
+  }
+  try {
+    await vcAudio();
+    VC.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true,
+                                                                     autoGainControl: true, channelCount: 1 } });
+    const code = `class Cap extends AudioWorkletProcessor { process(inp) { const c = inp[0] && inp[0][0];
+      if (c) this.port.postMessage(c.slice(0)); return true; } } registerProcessor("cap", Cap);`;
+    await VC.ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([code], { type: "application/javascript" })));
+    VC.node = new AudioWorkletNode(VC.ctx, "cap");
+    VC.node.port.onmessage = e => vcMic(e.data);
+    const mute = VC.ctx.createGain();
+    mute.gain.value = 0;
+    VC.ctx.createMediaStreamSource(VC.stream).connect(VC.node);
+    VC.node.connect(mute);
+    mute.connect(VC.ctx.destination);
+    VC.rs = { pos: 0, last: 0 };
+    VC.accN = 0;
+    return true;
+  } catch (e) {
+    say("microphone: " + e.message);
+    VC.stream = null;
+    return false;
+  }
+}
+// one click anywhere lets the page play sound
+const firstGesture = () => { VC.gesture = true; vcAudio().catch(() => {}); };
+window.addEventListener("pointerdown", firstGesture, { once: true });
+window.addEventListener("keydown", firstGesture, { once: true });
+const ptt = $("ptt");
+ptt.addEventListener("pointerdown", async ev => {
+  ev.preventDefault();
+  ptt.setPointerCapture(ev.pointerId);
+  VC.held = true;
+  if (!(await vcMicOn())) VC.held = false;
+});
+for (const t of ["pointerup", "pointercancel", "lostpointercapture"]) ptt.addEventListener(t, () => { VC.held = false; });
+window.addEventListener("keydown", ev => {
+  if (ev.code !== "Space" || ev.target.matches("input, select, textarea") || ev.repeat || freeLook) return;
+  ev.preventDefault();
+  VC.space = true;
+  vcMicOn().then(ok => { if (!ok) VC.space = false; });
+});
+window.addEventListener("keyup", ev => { if (ev.code === "Space") VC.space = false; });
+$("micopen").onchange = async ev => { VC.open = ev.target.checked && await vcMicOn(); ev.target.checked = VC.open; };
+$("vvol").oninput = ev => { if (VC.gain) VC.gain.gain.value = +ev.target.value; };
+// The camera, in game grid units + look direction (game axes, Z mirrored back), so the bot's
+// avatar and voice follow where you fly. Sent on change, and once a second to stay "fresh".
+const CAM = { last: "", at: 0, on: true };
+setInterval(() => {
+  if (!VC.ws || VC.ws.readyState !== 1) return;
+  if (!$("flycam").checked) {
+    if (CAM.on) { CAM.on = false; VC.ws.send(JSON.stringify({ type: "cam_off" })); }
+    return;
+  }
+  CAM.on = true;
+  const g = root.worldToLocal(camera.position.clone());
+  const d = new THREE.Vector3(); camera.getWorldDirection(d);
+  const msg = JSON.stringify({ type: "cam", g: [g.x, g.y, g.z].map(v => +v.toFixed(2)),
+                               d: [d.x, d.y, -d.z].map(v => +v.toFixed(3)) });
+  const now = performance.now();
+  if (msg !== CAM.last || now - CAM.at > 1000) { VC.ws.send(msg); CAM.last = msg; CAM.at = now; }
+}, 100);
+setInterval(() => {
+  const on = talking();
+  ptt.classList.toggle("on", on);
+  ptt.textContent = on ? "Talking..." : "Hold to talk";
+  $("vst").textContent = VC.ws ? (on ? "talking" : "listening") : (VC.gesture ? (VC.status || "waiting for the bot") : "click the map once to hear it");
+  $("vmic").style.width = Math.min(100, VC.level * 400) + "%";
+  $("vin").style.width = Math.min(100, VC.inLevel * 300) + "%";
+  VC.inLevel *= 0.7;
+  const now = performance.now();
+  const who = Object.keys(VC.heard).filter(k => now - VC.heard[k] < 700).map(k => VC.names[k] || "player " + k);
+  $("vspk").textContent = who.length ? "talking now: " + who.join(", ") : "";
+}, 150);
+
+// ---------- polling ----------
+let shown = { rev: -1, sid: "" }, loadingBlocks = false;
+async function loadBlocks() {
+  loadingBlocks = true;
+  await catalogReady;
+  try {
+    const b = await api(`/view/blocks?rev=${shown.rev}&sid=${encodeURIComponent(shown.sid)}`);
+    if (!b.same) {
+      if (b.sid !== shown.sid) clearBlocks();
+      setBlocks(b.blocks || []);
+      shown = { rev: b.rev, sid: b.sid || "" };
+    }
+  } catch (e) { /* next poll retries */ }
+  loadingBlocks = false;
+}
+async function pollView() {
+  try {
+    const r = await api("/view");
+    const v = r.view || {};
+    const live = !!v.t && r.now - v.t < 3;
+    if (v.room !== lastView.room) setTimeout(loadMaps, 50);
+    lastView = v;
+    $("st").textContent = live ? "live" : (v.t ? "bot left the map" : "not live");
+    $("st").className = "pill " + (live ? "live" : "dead");
+    $("rm").hidden = !v.rk;
+    $("rm").textContent = v.rk ? "map " + v.rk : "";
+    $("cnt").hidden = !live;
+    $("cnt").textContent = live ? (v.players || []).length + " players" : "";
+    $("hint").hidden = !!renderer && (live || blocks.size > 0);
+    if (v.dims) setRoom(v.dims);
+    updatePlayers(live ? v.players || [] : []);
+    if (live && (v.rev !== shown.rev || v.sid !== shown.sid) && !loadingBlocks) loadBlocks();
+    if (live && VC.gesture && !VC.ws && !VC.connecting && performance.now() > VC.retryAt) vcConnect();   // hear the map
+  } catch (e) {
+    $("st").textContent = e.message;
+    $("st").className = "pill dead";
+  }
+  setTimeout(pollView, 250);
+}
+async function pollBot() {
+  try {
+    const s = await api("/status");
+    const lines = (s.log || "").trim().split("\n").filter(Boolean);
+    const last = [...lines].reverse().find(l => l.startsWith("view:")) || lines[lines.length - 1] || "";
+    $("blog").textContent = (s.running ? "running" : "stopped") + (last ? "\n" + last : "");
+  } catch (e) { /* retried */ }
+  setTimeout(pollBot, 4000);
+}
+
+// ---------- actions: the bot's commands (the Photon tab's command list as buttons) ----------
+// "%" = the player picked above (left out = the player the bot is hooked on).
+const ACTIONS = [
+  ["Hit them", [["Boom", "boom %"], ["Lightning", "smite %"], ["Freeze", "ice %"], ["Jump scare", "jumpscare %"],
+                ["Black hole", "blackhole %"], ["Meteors", "meteors %"]]],
+  ["Give", [["Finger gun", "fingergun %"], ["Lightning gun", "lightning %"], ["Ice gun", "freeze %"],
+            ["Scare gun", "scare %"], ["Pellet blocks", "pelletfx %"], ["God hands (both)", "godhand both %"], ["God hand (one)", "godhand %"],
+            ["Big build", "bigbuild %"], ["Coins", "coins %"]]],
+  ["Take back", [["Finger gun off", "fingergun off %"], ["Lightning off", "lightning off"], ["Ice off", "freeze off"],
+                 ["Scare off", "scare off"], ["Pellets off", "pelletfx off"], ["God hand off", "godhand off"],
+                 ["Big build off", "bigbuild off"], ["Coins off", "coins off"], ["Thaw", "thaw"]]],
+  ["Games", [["Rain", "rain %"], ["Rain off", "rain off"], ["Clean rain", "rain clean"], ["Titan boss", "boss"],
+             ["Boss pause", "boss pause"], ["Boss resume", "boss resume"], ["Boss off", "boss off"],
+             ["Waves", "waves"], ["Waves off", "waves off"], ["Hot potato", "potato"], ["Potato off", "potato off"],
+             ["King of the hill", "koth"], ["KOTH off", "koth off"], ["Hill map", "map"], ["Map off", "map off"],
+             ["Only Up", "onlyup %"], ["Only Up clear", "onlyup clear"]]],
+  ["Bombs", [["Basic", "bomb basic"], ["Impulse", "bomb impulse"], ["Pumpkin", "bomb pumpkin"],
+             ["Radiation", "bomb radiation"]]],
+  // the rest of the Photon tab's bot features (owner 2026-10-29: "all the photon bot stuff")
+  ["Skelly", [["Spawn skelly", "skel %"], ["Random dance", "skel dance %"], ["Gangnam Style", "skel dance gangnam_style %"],
+              ["Chicken Dance", "skel dance chicken_dance %"], ["Flair", "skel dance flair %"],
+              ["Breakdance", "skel dance breakdance_1990 %"], ["Fast", "skel fast %"], ["Slow-mo", "skel slow %"],
+              ["Spin", "skel spin %"], ["Skelly party (8)", "skel party %"],
+              ["Skelly blocks", "skellyblock %"], ["Skelly blocks off", "skellyblock off"]]],
+  ["Halloween door", [["Skeleton party", "door skelly %"], ["Horror mob", "door horror %"], ["Fire storm", "door fire %"],
+                      ["Sleep", "door sleep %"], ["Float", "door float %"], ["Ice storm", "door ice %"]]],
+  ["Bad Apple", [["Bad Apple", "apple %"], ["Bad Apple big", "apple big %"], ["Bad Apple small", "apple small %"],
+                 ["No sound", "apple mute %"], ["Stop", "apple off"], ["Apple sign", "applesign %"],
+                 ["Apple signs off", "applesign off"], ["Screen where I look", "@screenhere"], ["Small screen where I look", "@screenhere small"],
+                 ["Make a screen (player places a pillow)", "screen %"], ["Small screen (pillow)", "screen small %"],
+                 ["Screen off", "screen off"]]],
+  ["Arcade", [["Tetris", "tetris"], ["Snake", "snake"], ["Pong", "pong"], ["Pong 2 players", "pong 2p"],
+              ["Paint canvas", "canvas"], ["Canvas clear", "canvas clear"], ["Canvas off", "canvas off"],
+              ["Restart game", "game restart"], ["Game off", "game off"]]],
+  ["Build", [["House", "house %"], ["House 2", "house2 %"], ["Only Up small", "onlyup simple %"],
+             ["Mirror build", "mirrorbuild %"], ["Mirror build off", "mirrorbuild off"],
+             ["Outline", "outline %"], ["Outline off", "outline off"], ["Coin planet", "coins planet"]]],
+  ["Bot", [["Mimic", "mimic %"], ["Mirror", "mirror %"], ["Stop mimic", "stop"], ["Copy look", "look %"],
+           ["Who's here", "players"], ["Clean up spam", "cleanup"]]],
+];
+async function botCmd(cmd) {
+  cmd = cmd.replace(/\s+/g, " ").trim();
+  if (!cmd) return;
+  try {
+    const r = await post("/cmd", { cmd });
+    say(r.reloading ? `bot is restarting, then: ${cmd}` : `sent: ${cmd}`);
+  } catch (e) { say(e.message); }
+}
+for (const [title, list] of ACTIONS) {
+  const h = document.createElement("h3");
+  h.textContent = title;
+  const row = document.createElement("div");
+  row.className = "row";
+  for (const [label, cmd] of list) {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.onclick = () => {
+      if (cmd.startsWith("@screenhere")) {         // the screen's bottom-middle = the map spot the camera looks at
+        const g = root.worldToLocal(controls.target.clone());
+        const c = [g.x, g.y, g.z].map(v => Math.max(0, Math.floor(v)));
+        return botCmd(`screen ${cmd.includes("small") ? "small " : ""}at ${c.join(" ")}`);
+      }
+      botCmd(cmd.replace("%", $("acttarget").value));
+    };
+    row.append(b);
+  }
+  $("acts").append(h, row);
+}
+$("actsend").onclick = () => { botCmd($("actcmd").value); $("actcmd").value = ""; };
+$("actcmd").addEventListener("keydown", e => { if (e.key === "Enter") $("actsend").click(); e.stopPropagation(); });
+function fillTargets(list) {
+  const sel = $("acttarget"), keep = sel.value;
+  while (sel.options.length > 1) sel.remove(1);
+  for (const p of list) if (p.n) sel.append(new Option(p.n, p.n));
+  sel.value = [...sel.options].some(o => o.value === keep) ? keep : "";
+}
+
+// ---------- render loop ----------
+const clock = new THREE.Clock();
+function resize() {
+  const w = canvas.clientWidth, h = canvas.clientHeight, pr = renderer.getPixelRatio();
+  if (!w || !h) return;
+  if (canvas.width !== Math.floor(w * pr) || canvas.height !== Math.floor(h * pr)) {
+    renderer.setSize(w, h, false);
+    camera.aspect = w / Math.max(1, h);
+    camera.updateProjectionMatrix();
+  }
+}
+function frame() {
+  const dt = Math.min(clock.getDelta(), 0.1), k = 1 - Math.exp(-dt * 12);
+  for (const s of players.values()) {
+    s.outer.position.lerp(s.pos, k);
+    s.outer.quaternion.slerp(s.rot, k);
+    poseRig(s, s.data, k);
+  }
+  const f = followActor != null ? players.get(followActor) : [...players.values()].find(s => s.t);
+  if (f && $("follow").checked) {
+    const d = f.outer.getWorldPosition(tmpV).sub(controls.target).multiplyScalar(k * 0.5);
+    controls.target.add(d);
+    camera.position.add(d);
+  }
+  flyStep(Math.min(dt, .05));
+  for (const t of scrolling) t.offset.y = (t.offset.y + dt * .6) % 1;
+  controls.update();
+  if (renderer) {
+    resize();
+    const me = botMe();
+    if (me) me.outer.visible = !(me.data.hidden || ($("flycam").checked && VC.ws));   // it's at the camera
+    renderer.render(scene, camera);
+    if (me && $("poseview").checked) drawPose(me);
+  }
+  requestAnimationFrame(frame);
+}
+
+if (new URLSearchParams(location.search).has("debug")) window.__view = { THREE, camera, controls, players, root, blocks, blockGroup, scene, renderer, baked };
+loadMaps();
+setInterval(loadMaps, 8000);
+pollView();
+pollBot();
+frame();
+</script>
+</body>
+</html>

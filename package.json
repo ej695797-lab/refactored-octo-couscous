@@ -1,0 +1,15 @@
+{
+  "name": "yeeps-proxy",
+  "version": "1.0.0",
+  "description": "Yeeps stat lookup proxy",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.0",
+    "cors": "^2.8.5",
+    "@aws-sdk/client-lambda": "^3.600.0",
+    "@aws-sdk/client-cognito-identity": "^3.600.0"
+  }
+}

@@ -1,0 +1,22 @@
+import { spawn } from "node:child_process"; import { writeFileSync, mkdirSync } from "node:fs";
+const OUT = process.argv[2]; mkdirSync(OUT + "/prof", { recursive: true });
+const ch = spawn("/usr/bin/google-chrome", ["--headless=new","--remote-debugging-port=9339",`--user-data-dir=${OUT}/prof`,"--use-angle=swiftshader","--enable-unsafe-swiftshader","--window-size=1280,800","--no-first-run","about:blank"], { stdio: "ignore" });
+const sleep = ms => new Promise(r => setTimeout(r, ms)); let t = [];
+for (let i = 0; i < 40 && !t.length; i++) { await sleep(250); try { t = (await (await fetch("http://127.0.0.1:9339/json/list")).json()).filter(x => x.type === "page"); } catch {} }
+const ws = new WebSocket(t[0].webSocketDebuggerUrl); await new Promise(r => ws.addEventListener("open", r));
+let id = 0; const pend = new Map(), logs = []; ws.addEventListener("message", e => { const m = JSON.parse(e.data); if (m.id && pend.has(m.id)) { pend.get(m.id)(m); pend.delete(m.id); } if (m.method === "Runtime.exceptionThrown") logs.push(m.params.exceptionDetails.exception?.description); });
+const send = (method, params = {}) => new Promise(r => { const i = ++id; pend.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
+const ev = async x => (await send("Runtime.evaluate", { expression: x, returnByValue: true })).result.result?.value;
+await send("Page.enable"); await send("Runtime.enable"); await send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+await send("Page.navigate", { url: "http://127.0.0.1:8799/editor/view?debug=1" }); await sleep(11000);
+await ev(`(() => { const V = window.__view; const s = [...V.players.values()][0]; const p = s.outer.localToWorld(new V.THREE.Vector3(6, 0, 0));
+  V.controls.target.copy(p); V.camera.position.copy(p).add(new V.THREE.Vector3(9, 9, 9)); V.controls.update(); })()`);
+await ev(`(() => { document.getElementById("pat").value = "2x2x2_stuffed"; })()`);
+await send("Input.dispatchKeyEvent", { type: "keyDown", key: "1", code: "Digit1", text: "1" }); await send("Input.dispatchKeyEvent", { type: "keyUp", key: "1", code: "Digit1" });
+await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 790, y: 430 }); await sleep(1500);
+await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 795, y: 432 }); await sleep(800);
+const r = await send("Page.captureScreenshot", { format: "png", clip: { x: 500, y: 200, width: 600, height: 450, scale: 1 } });
+writeFileSync(`${OUT}/ghost.png`, Buffer.from(r.result.data, "base64"));
+console.log("ghost model visible:", await ev(`(() => { let v = false; window.__view.root.traverse(o => { if (o.isMesh && o.material && o.material.opacity === .45 && o.parent && o.parent.parent && o.parent.parent.visible) v = true; }); return v; })()`));
+console.log(logs.length ? "EXC " + logs.join("\n") : "(no exceptions)");
+ws.close(); ch.kill(); process.exit(0);

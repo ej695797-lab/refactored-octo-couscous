@@ -32,7 +32,7 @@ from fastapi.responses import RedirectResponse
 # and survives restarts), and is posted to the password webhook on each change.
 # An optional MASTER password (set EDITOR_PW on Render) is accepted as a backup;
 # there is no hardcoded fallback password anymore.
-_MASTER_PW = os.getenv("EDITOR_PW", "")
+_MASTER_PW = os.getenv("EDITOR_PW", "") or os.getenv("EDITOR_PASSWORD", "")
 # The rotating code is only 6 digits AND is shared with the 1.31 editor (it gets
 # posted to a Discord channel), so it can be seen/leaked rather than guessed
 # (2026-10-27 intrusion: someone used the visible 6-digit code, not brute force).

@@ -2873,10 +2873,8 @@ async def handle_login(body: dict) -> dict:
                 # Owner 2026-10-18: accounts with NO Discord link anywhere (old
                 # accounts) get a relink ban screen. Served only, never persisted:
                 # linking with /link lets them in on the next login.
-                if (not _ever_linked and not str(account_id).startswith("o_99000000")
-                        and "blaze" not in (account.get("roleKeys") or [])):   # owner/staff exempt
-                    _link_blocked = True
-                    print(f"[link] {account_id} has no Discord link")
+                # Link requirement disabled: allow all accounts to play without Discord link.
+                _link_blocked = False
     except Exception as _e:
         print(f"[verified] gate failed for {account_id}: {_e}")
 

@@ -38,7 +38,7 @@ PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://api.your-domain.example"
 # join gate. Forcing the shared presence version to this value makes OLDER
 # clients (which report "1.19.0" and still ship GameAnalytics telemetry) fail
 # that check -> they can't join rooms. Bump via env REQUIRED_CLIENT_VERSION.
-REQUIRED_CLIENT_VERSION = os.getenv("REQUIRED_CLIENT_VERSION", "1.31.0-blaze")
+REQUIRED_CLIENT_VERSION = os.getenv("REQUIRED_CLIENT_VERSION", "1.31-yeeper")
 # True only on a 2.x deployment (the separate 2.4.0-blaze Render service sets
 # REQUIRED_CLIENT_VERSION=2.4.0-blaze). Every 2.x-only behaviour is gated on this,
 # so the 1.31 server is unaffected.

@@ -82,7 +82,7 @@ RETIRED_ATTEST_HASHES = {
 
 # Client build identity/integrity gate (services/build_gate.py). The 1.31 APK
 # sends /c/<buildId>.<libil2cpp hash>.<libBNMExplorer hash>/ in its login path.
-ALLOWED_CLIENT_BUILDS = set(filter(None, (os.getenv("ALLOWED_CLIENT_BUILDS") or "131b15")   # 131b15 = headset keys on API calls + Photon joins; older builds must update
+ALLOWED_CLIENT_BUILDS = set(filter(None, (os.getenv("ALLOWED_CLIENT_BUILDS") or "131b15,131b16,131b17,131b18,131b19,131b20")))
                                    .replace(" ", "").split(",")))
 ALLOWED_CLIENT_TAGS = set(filter(None, (os.getenv("ALLOWED_CLIENT_TAGS") or
                                         "131b6.5d63cf523d48ca70.471a1e62d887c1ee,"

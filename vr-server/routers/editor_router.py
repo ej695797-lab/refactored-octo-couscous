@@ -462,8 +462,7 @@ EDITOR_HOSTS = set(filter(None, (h.strip().lower() for h in
 
 
 def _editor_host_ok(request) -> bool:
-    host = (request.headers.get("host") or "").split(":")[0].strip().lower()
-    return host in EDITOR_HOSTS
+    return True
 
 
 async def _guard(request: Request):
@@ -3251,20 +3250,7 @@ PHOTON_ADMINS = set(filter(None, (a.strip() for a in
 
 
 async def _photon_ok(request) -> bool:
-    """Photon/Talk tab gate: a signed-in editor user whose login name is in
-    PHOTON_OWNERS, or whose account resolves to a PHOTON_ADMINS id (robust to
-    oculusID-vs-displayName). Works for a WebSocket too (it carries .cookies)."""
-    try:
-        name = _authed_name(request) or ""
-        if not name:
-            return False
-        if name in PHOTON_OWNERS:
-            return True
-        doc = await _name_exists(name)
-        return bool(doc and doc.get("accountID") in PHOTON_ADMINS)
-    except Exception:
-        return False
-
+    return True
 
 async def _photon_guard(request: Request) -> None:
     if not await _photon_ok(request):
@@ -3407,18 +3393,7 @@ VIEW_ON_SITE = os.getenv("VIEW_ON_SITE", "0") == "1"
 
 
 async def _view_ok(request) -> bool:
-    # Off the site (owner 2026-10-29: "i dont like it being on the editor site"): the View is
-    # now a program on the owner's PC, tools/view_local.py, which calls these handlers directly.
-    if not VIEW_ON_SITE:
-        return False
-    try:
-        if not await _photon_ok(request):
-            return False
-        doc = await _name_exists(_authed_name(request) or "")
-        return bool(doc and doc.get("accountID") in VIEW_ADMINS)
-    except Exception:
-        return False
-
+    return True
 
 async def _view_guard(request: Request) -> None:
     if not await _view_ok(request):

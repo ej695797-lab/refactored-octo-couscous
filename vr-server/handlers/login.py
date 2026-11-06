@@ -2770,7 +2770,7 @@ async def handle_login(body: dict) -> dict:
     # match for the pw / multiplayer map-sync gate, which compares the master
     # player's stored version against the joiner's reported version. A mismatch
     # makes clients fail with OUTDATED_CLIENT and stall loading the shared room.
-    data["applicationVersion"] = REQUIRED_CLIENT_VERSION
+    data["applicationVersion"] = body.get("applicationVersion") or body.get("trueVersion") or REQUIRED_CLIENT_VERSION
     # dataVersion mirrors what the client sent (2 for 2.x); keep in sync.
     if "dataVersion" in body:
         data["dataVersion"] = body.get("dataVersion")
@@ -3153,7 +3153,7 @@ async def handle_login(body: dict) -> dict:
     # a consistent version for this account. Must match REQUIRED_CLIENT_VERSION
     # or updated clients fail the map-sync gate against each other.
     if data.get("applicationVersion") != REQUIRED_CLIENT_VERSION:
-        data["applicationVersion"] = REQUIRED_CLIENT_VERSION
+        data["applicationVersion"] = body.get("applicationVersion") or body.get("trueVersion") or REQUIRED_CLIENT_VERSION
     _sess_added["applicationVersion"] = REQUIRED_CLIENT_VERSION
     if not data.get("gameSessionID"):
         data["gameSessionID"] = _random_session_id()

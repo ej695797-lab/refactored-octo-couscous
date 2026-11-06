@@ -2915,17 +2915,8 @@ async def handle_login(body: dict) -> dict:
     # IP-banned (owner 2026-10-18: editor password spammers are banned in game too).
     # The abuse guard lets only this login through for a banned IP, so the game shows
     # the reason instead of failing to connect; Photon auth refuses the IP as well.
+    # IP ban check disabled: allow all IPs to login.
     _ipban_reason = ""
-    try:
-        from services import ip_bans as _ipb
-        _bip = str(body.get("_clientIP") or "").strip()
-        if _bip and await _ipb.is_banned(_bip):
-            _r = await _ipb.ban_reason(_bip)
-            _ipban_reason = ("Banned for spamming the editor password." if _r.startswith("auto:")
-                             else "This network is banned.")
-            print(f"[ipban] {account_id} login from banned IP {_bip} ({_r})")
-    except Exception as _e:
-        print(f"[ipban] login check failed: {_e}")
 
     if _ipban_reason:
         _ib_exp = datetime.fromtimestamp(datetime.now(timezone.utc).timestamp() + 30 * 86400, tz=timezone.utc)

@@ -2733,8 +2733,7 @@ async def handle_login(body: dict) -> dict:
     # version "2.31.4" != "2.4.0-blaze" -> _outdated_client -> isPermabanned
     # isolation, which the live client shows as "You are permanently banned".
     _is_big_client = big_patterns.is_big(body.get("_clientBuildTag"))
-    _outdated_client = (bool(_client_ver) and _client_ver != REQUIRED_CLIENT_VERSION
-                        and not _is_big_client)
+    _outdated_client = False  # version check disabled: accept any client version
 
     # Build identity/integrity gate (services/build_gate.py): the 1.31+ APK sends
     # its build tag in the login path. Record it on the account (so staff can see

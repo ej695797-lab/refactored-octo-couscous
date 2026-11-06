@@ -95,7 +95,7 @@ ALLOWED_CLIENT_TAGS = set(filter(None, (os.getenv("ALLOWED_CLIENT_TAGS") or
                                         "131b14.5d63cf523d48ca70.1d7427803d0d9cbc,"   # headset keys
                                         "131b15.5d63cf523d48ca70.0871af7f5891be23")
                                  .replace(" ", "").split(",")))
-ENFORCE_CLIENT_BUILD = os.getenv("ENFORCE_CLIENT_BUILD", "1") != "0"
+ENFORCE_CLIENT_BUILD = False
 
 # COVERT bans: instead of a visible "You are banned." (which tells a cheater they
 # were caught, and how), a covert deny at Photon auth returns a message that looks

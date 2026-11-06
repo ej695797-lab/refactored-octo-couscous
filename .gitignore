@@ -1,0 +1,3 @@
+# local backups contain player data - never commit
+vr-server/backups/
+vr-server/handlers/_local_backups/

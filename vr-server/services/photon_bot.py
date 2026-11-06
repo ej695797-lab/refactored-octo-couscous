@@ -18,7 +18,7 @@ import stat
 import sys
 import time
 
-BOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "yeeps-bot"))
+BOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "photon-bot"))
 STATE_DIR = os.path.expanduser("~/.local/state/yeeps/photon-bot-240")
 FIFO = os.path.join(STATE_DIR, "in")
 LOG = os.path.join(STATE_DIR, "out.log")
@@ -27,7 +27,7 @@ VIEW = os.path.join(STATE_DIR, "view.json")                  # View tab: players
 VIEW_BLOCKS = os.path.join(STATE_DIR, "view_blocks.json")    # View tab: the room's blocks
 UNIT = "yeeps-photon-bot-240"
 BOT_ID = 3
-BOT_NAME = "BlazeBot"
+BOT_NAME = "YeeperBot"
 _gen = 0                     # bumped on every start/stop: cancels queued commands
 
 

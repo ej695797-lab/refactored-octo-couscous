@@ -85,9 +85,7 @@ def note_link_blocked(account_id: str, ip: str) -> None:
 
 
 def was_link_blocked(account_id: str = "", ip: str = "") -> bool:
-    now = _time.time()
-    return any(k and now - _link_blocked_recent.get(str(k), 0) < _LINK_BLOCK_WINDOW
-               for k in (account_id, ip))
+    return False
 
 
 def clear_link_blocked(account_id: str = "", ip: str = "") -> None:

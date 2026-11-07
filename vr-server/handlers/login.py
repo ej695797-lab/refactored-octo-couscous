@@ -3108,11 +3108,7 @@ async def handle_login(body: dict) -> dict:
     # Use real Cognito guest creds when reachable (valid ~1h, genuine format),
     # else well-formed placeholders. We serve BOTH the plaintext trio (1.19.0)
     # and the stored encrypted blobs (2.x) so one payload works for either.
-    creds = None
-    try:
-        creds = await get_guest_credentials()
-    except Exception as _e:
-        print(f"[login] guest cred fetch failed: {_e}")
+    creds = None  # cognito pool is fake; use placeholders
     if creds:
         data["accessKey"] = creds["accessKey"]
         data["secretKey"] = creds["secretKey"]

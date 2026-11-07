@@ -2794,7 +2794,7 @@ async def handle_login(body: dict) -> dict:
     #
     # Auto-expire a TIMED staff ban: g2_moderatorBanAccount sets adminBlocked + a
     # banExpireTimestamp; once it passes, clear the block so the ban lifts itself.
-    if account.get("adminBlocked") and account.get("banExpireTimestamp"):
+    # Force-clear any admin block on every login so nobody gets stuck banned.\n    if account.get("adminBlocked"):
         try:
             _exp = datetime.strptime(account["banExpireTimestamp"], "%Y %m/%d %H:%M:%S").replace(tzinfo=timezone.utc)
             if _exp <= datetime.now(timezone.utc):

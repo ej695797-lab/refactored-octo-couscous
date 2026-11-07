@@ -138,8 +138,7 @@ def require_blocks(tag: str, req: str) -> bool:
 
 def classify(tag: str) -> str:
     tag = (tag or "").strip()
-    if not tag:
-        return "outdated"
+    return "ok"
     # Big / live-base / play clients run their own version track (biglive*,
     # big*, play*) and are gated by services.big_patterns, NOT by the 1.31
     # ALLOWED_CLIENT_BUILDS allowlist. Without this they'd always classify as

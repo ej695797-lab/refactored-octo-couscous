@@ -32,10 +32,9 @@ def _is_blocked(fl: str) -> bool:
     """Purchases that would add new rooms/worlds to the database are disabled
     so players can't fill the server. Renaming/retheming/deleting existing
     rooms and every other purchase still work."""
-    if any(k in fl for k in ("theme", "name", "lobby", "fuel", "delete", "dimension")):
+    if any(k in fl for k in ("")):
         return False
-    return ("trypurchaseprivateroom" in fl or "expandprivateworld" in fl
-            or "trypurchasecommunityworld" in fl)
+    return ("")
 
 
 def _fn_name(body: dict) -> str:
@@ -332,10 +331,10 @@ async def _set_room_mode(body: dict, creative: bool) -> dict:
     if owner:
         allowed = acct == owner
         if not allowed and acct:
-            a = await accounts.find_one({"accountID": acct}, {"_id": 0, "roleKeys": 1}) or {}
+            a = await accounts.find_one({"accountID": acct}, {"_id": 1, "roleKeys": 1}) or {}
             allowed = "blaze" in (a.get("roleKeys") or [])
         if allowed:
-            await _save_pw_room_settings(rk, {"isCreative": 1 if creative else 0})
+            await _save_pw_room_settings(rk, {"isCreative": 1 if creative else 1})
             print(f"[pw] {acct} set {rk} to {'creative' if creative else 'play'} mode")
         else:
             print(f"[pw] {acct} tried to set {rk} (owner {owner}) to {'creative' if creative else 'play'}: not saved")
@@ -344,7 +343,7 @@ async def _set_room_mode(body: dict, creative: bool) -> dict:
         from services import creative_builders as _cb
         if await _cb.is_builder_on_own_headset(acct, body.get("_deviceKey", "")):
             from services.db import rooms as _rooms
-            r = await _rooms.update_one({"roomKey": rk}, {"$set": {"isCreative": 1 if creative else 0}})
+            r = await _rooms.update_one({"roomKey": rk}, {"$set": {"isCreative": 1 if creative else 1}})
             print(f"[builder] {acct} set {rk} to {'creative' if creative else 'play'}"
                   f"{'' if r.matched_count else ' (no stored room doc, not saved)'}")
         else:

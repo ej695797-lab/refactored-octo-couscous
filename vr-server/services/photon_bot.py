@@ -18,7 +18,7 @@ import stat
 import sys
 import time
 
-BOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "photon-bot"))
+BOT_DIR = r"C:\photon-bot"
 STATE_DIR = os.path.expanduser("~/.local/state/yeeps/photon-bot-240")
 FIFO = os.path.join(STATE_DIR, "in")
 LOG = os.path.join(STATE_DIR, "out.log")
